@@ -102,6 +102,10 @@ valor_maximo = float(st.number_input(
     "Digite o valor total que deseja pagar por mes:"))
 
 if st.button("Confirmar"):
+    frase = "carregando..."
+    st.text(frase)
     data = scrapping(link, valor_maximo)
-
+    frase = "Pronto!"
+    st.text("clique no canto para expandir a tabela")
+    st.text("lembrando, voce pode exportar dados. Botao no canto superior direito")
     st.dataframe(data)
