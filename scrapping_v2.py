@@ -28,7 +28,7 @@ def get_last_page_number(pagination_list):
     return int(last_page_link.split("o=")[-1])
 
 
-def scrapping(link, price_limit):
+def scrapping(link, price_limit, progress_callback=None):
     driver = create_undetected_driver(headless=False)
     driver.get(link)
     pagination_list = driver.find_element(By.ID, "listing-pagination")
@@ -36,8 +36,11 @@ def scrapping(link, price_limit):
     apartamentos = []
 
     for i in range(1, last_page_number+1):
+        if progress_callback:
+            progress_callback(i, last_page_number)
+
         time.sleep(0.6)
-        driver.get(intereable_link(link, i))
+        driver.get(f"{link}&o={i}")
         time.sleep(5)
         dados = json.loads(driver.find_element(
             By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
@@ -45,67 +48,385 @@ def scrapping(link, price_limit):
 
         for apartamento in dados:
             try:
-                total_cost = 0
-                condominio, iptu, size, quartos, banheiros = None, None, None, None, None
+                condominio, size, quartos, banheiros, vagas = None, None, None, None, None
                 for elemento in apartamento['properties']:
                     if elemento["name"] == 'condominio':
                         condominio = rs_to_float(elemento['value'])
-                    elif elemento["name"] == 'iptu':
-                        iptu = rs_to_float(elemento['value'])
                     elif elemento["name"] == 'size':
                         size = elemento['value']
                     elif elemento["name"] == 'rooms':
                         quartos = elemento['value']
                     elif elemento["name"] == 'bathrooms':
                         banheiros = elemento['value']
+                    elif elemento["name"] == 'garage_spaces':
+                        vagas = elemento['value']
 
                 price = rs_to_float(apartamento['price'])
+                total_cost = price
                 if condominio:
                     total_cost += condominio
-                if iptu:
-                    total_cost += iptu
                 if total_cost > price_limit:
                     continue
+
+                image = None
+                images = apartamento.get('images') or []
+                if isinstance(images, list) and len(images) > 0:
+                    image = images[0].get('original')
+
+                data_anuncio = apartamento.get('date')
 
                 apartamentos.append({
                     "title": apartamento['title'],
                     "location": apartamento['location'],
-                    "price": apartamento['price'],
+                    "price": price,
                     "total_cost": total_cost,
                     "condominio": condominio,
-                    "iptu": iptu,
                     "size": size,
                     "quartos": quartos,
                     "banheiros": banheiros,
+                    "vagas": vagas,
+                    "data": data_anuncio,
                     "link": apartamento['url'],
+                    "image": image,
                 })
             except Exception as e:
                 print(e)
                 continue
 
+    driver.quit()
     df = pd.DataFrame(apartamentos)
     return df
 
 
-st.title("Scrapping Imoveis com limite de preco")
-st.header("Solucao:")
-st.text("A olx infelizmente nao filtra apartamento pelo valor de aluguel+iptu+condominio")
-st.text("Pensando nisso criei essa interface para facilitar sua pesquisa")
-st.header("Instrucao:")
-st.text("1. Entre la olx e filtre ao maximo todos os itens que deseja")
-st.text("2. Coloque como valor maximo de aluguel como o valor maximo que pagaria no total(iptu,condominio e alguel)")
-st.text("3. Copie o link completo aqui")
-st.text("Obs: caso o link termine com: ol=1 apague esse termo")
+# --- Page config ---
+st.set_page_config(
+    page_title="Busca de Imoveis OLX",
+    page_icon="🏠",
+    layout="wide",
+)
 
-link = st.text_input("Link:")
-valor_maximo = float(st.number_input(
-    "Digite o valor total que deseja pagar por mes:"))
+# --- Sidebar ---
+with st.sidebar:
+    st.header("Busca de Imoveis")
+    st.caption("Filtre imoveis pelo custo total (aluguel + condominio)")
 
-if st.button("Confirmar"):
-    frase = "carregando..."
-    st.text(frase)
-    data = scrapping(link, valor_maximo)
-    frase = "Pronto!"
-    st.text("clique no canto para expandir a tabela")
-    st.text("lembrando, voce pode exportar dados. Botao no canto superior direito")
-    st.dataframe(data)
+    link = st.text_input("Link da OLX:", placeholder="Cole o link da busca da OLX aqui")
+    valor_maximo = st.number_input(
+        "Valor maximo mensal (R$):",
+        min_value=0.0,
+        value=3000.0,
+        step=100.0,
+        format="%.2f",
+    )
+    buscar = st.button("Buscar", use_container_width=True, type="primary")
+
+    with st.expander("Como usar?"):
+        st.markdown("""
+1. Entre na **OLX** e filtre ao maximo os itens que deseja
+2. Coloque o valor maximo como o **valor total** que pagaria (aluguel + condominio)
+3. Copie o **link completo** e cole acima
+4. Clique em **Buscar**
+
+> **Obs:** caso o link termine com `ol=1`, apague esse termo antes de colar.
+""")
+
+# --- Main area ---
+st.title("Busca de Imoveis OLX")
+st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferramenta resolve isso.")
+
+# --- Session state ---
+if "dados" not in st.session_state:
+    st.session_state.dados = None
+
+# --- Scraping ---
+if buscar:
+    if not link:
+        st.error("Por favor, cole o link da busca da OLX na sidebar.")
+    else:
+        with st.status("Buscando imoveis...", expanded=True) as status:
+            progress_bar = st.progress(0)
+            progress_text = st.empty()
+
+            def update_progress(current, total):
+                progress_bar.progress(current / total)
+                progress_text.text(f"Buscando pagina {current} de {total}...")
+
+            try:
+                data = scrapping(link, valor_maximo, progress_callback=update_progress)
+                st.session_state.dados = data
+                status.update(label="Busca finalizada!", state="complete", expanded=False)
+            except Exception as e:
+                status.update(label="Erro durante a busca", state="error", expanded=True)
+                st.error(f"Ocorreu um erro: {e}")
+                st.session_state.dados = None
+
+# --- Results ---
+if st.session_state.dados is not None:
+    df = st.session_state.dados
+
+    if df.empty:
+        st.warning("Nenhum imovel encontrado com os filtros informados.")
+    else:
+        # --- Metricas ---
+        st.subheader("Resumo")
+        col1, col2, col3, col4, col5 = st.columns(5)
+
+        with col1:
+            st.metric("Total encontrados", len(df))
+        with col2:
+            st.metric("Menor custo total", f"R$ {df['total_cost'].min():,.2f}")
+        with col3:
+            st.metric("Custo medio", f"R$ {df['total_cost'].mean():,.2f}")
+        with col4:
+            sizes = pd.to_numeric(df["size"], errors="coerce")
+            if sizes.notna().any():
+                st.metric("Maior area", f"{sizes.max():.0f} m²")
+            else:
+                st.metric("Maior area", "N/A")
+        with col5:
+            vagas_num = pd.to_numeric(df["vagas"], errors="coerce")
+            if vagas_num.notna().any():
+                st.metric("Media de vagas", f"{vagas_num.mean():.1f}")
+            else:
+                st.metric("Media de vagas", "N/A")
+
+        st.divider()
+
+        # --- Filtros interativos ---
+        st.subheader("Filtros")
+
+        # Linha 1: Custo total e Aluguel
+        fcol1, fcol2 = st.columns(2)
+
+        with fcol1:
+            min_cost = float(df["total_cost"].min())
+            max_cost = float(df["total_cost"].max())
+            if min_cost < max_cost:
+                faixa_custo = st.slider(
+                    "Custo total (R$)",
+                    min_value=min_cost,
+                    max_value=max_cost,
+                    value=(min_cost, max_cost),
+                    step=50.0,
+                )
+            else:
+                faixa_custo = (min_cost, max_cost)
+
+        with fcol2:
+            min_price = float(df["price"].min())
+            max_price = float(df["price"].max())
+            if min_price < max_price:
+                faixa_aluguel = st.slider(
+                    "Aluguel (R$)",
+                    min_value=min_price,
+                    max_value=max_price,
+                    value=(min_price, max_price),
+                    step=50.0,
+                )
+            else:
+                faixa_aluguel = (min_price, max_price)
+
+        # Linha 2: Condominio e Area
+        fcol3, fcol4 = st.columns(2)
+
+        with fcol3:
+            cond_values = df["condominio"].dropna()
+            if len(cond_values) > 0:
+                min_cond = float(cond_values.min())
+                max_cond = float(cond_values.max())
+                if min_cond < max_cond:
+                    faixa_cond = st.slider(
+                        "Condominio (R$)",
+                        min_value=min_cond,
+                        max_value=max_cond,
+                        value=(min_cond, max_cond),
+                        step=50.0,
+                    )
+                else:
+                    faixa_cond = (min_cond, max_cond)
+            else:
+                faixa_cond = None
+
+        with fcol4:
+            sizes = pd.to_numeric(df["size"], errors="coerce")
+            if sizes.notna().any():
+                min_size = float(sizes.min())
+                max_size = float(sizes.max())
+                if min_size < max_size:
+                    faixa_area = st.slider(
+                        "Area (m²)",
+                        min_value=min_size,
+                        max_value=max_size,
+                        value=(min_size, max_size),
+                        step=5.0,
+                    )
+                else:
+                    faixa_area = (min_size, max_size)
+            else:
+                faixa_area = None
+
+        # Linha 3: Quartos, Banheiros, Vagas e Localizacao
+        fcol5, fcol6, fcol7, fcol8 = st.columns(4)
+
+        with fcol5:
+            quartos_opcoes = sorted(df["quartos"].dropna().unique().tolist())
+            if quartos_opcoes:
+                quartos_sel = st.multiselect("Quartos", options=quartos_opcoes, default=quartos_opcoes)
+            else:
+                quartos_sel = []
+
+        with fcol6:
+            banheiros_opcoes = sorted(df["banheiros"].dropna().unique().tolist())
+            if banheiros_opcoes:
+                banheiros_sel = st.multiselect("Banheiros", options=banheiros_opcoes, default=banheiros_opcoes)
+            else:
+                banheiros_sel = []
+
+        with fcol7:
+            vagas_opcoes = sorted(df["vagas"].dropna().unique().tolist())
+            if vagas_opcoes:
+                vagas_sel = st.multiselect("Vagas", options=vagas_opcoes, default=vagas_opcoes)
+            else:
+                vagas_sel = []
+
+        with fcol8:
+            locais = sorted(df["location"].dropna().unique().tolist())
+            if locais:
+                locais_sel = st.multiselect("Localizacao", options=locais, default=locais)
+            else:
+                locais_sel = []
+
+        # --- Ordenacao ---
+        st.subheader("Ordenacao")
+        ocol1, ocol2 = st.columns(2)
+        with ocol1:
+            ordenar_por = st.selectbox("Ordenar por", [
+                "Custo Total", "Aluguel", "Condominio", "Area", "Data do anuncio"
+            ])
+        with ocol2:
+            ordem = st.radio("Ordem", ["Crescente", "Decrescente"], horizontal=True)
+
+        col_map = {
+            "Custo Total": "total_cost",
+            "Aluguel": "price",
+            "Condominio": "condominio",
+            "Area": "size",
+            "Data do anuncio": "data",
+        }
+        ascending = ordem == "Crescente"
+
+        # --- Aplicar filtros ---
+        df_filtrado = df[
+            (df["total_cost"] >= faixa_custo[0]) &
+            (df["total_cost"] <= faixa_custo[1]) &
+            (df["price"] >= faixa_aluguel[0]) &
+            (df["price"] <= faixa_aluguel[1])
+        ]
+
+        if faixa_cond is not None:
+            df_filtrado = df_filtrado[
+                (df_filtrado["condominio"].isna()) |
+                ((df_filtrado["condominio"] >= faixa_cond[0]) &
+                 (df_filtrado["condominio"] <= faixa_cond[1]))
+            ]
+
+        if faixa_area is not None:
+            sizes_filtrado = pd.to_numeric(df_filtrado["size"], errors="coerce")
+            df_filtrado = df_filtrado[
+                (sizes_filtrado.isna()) |
+                ((sizes_filtrado >= faixa_area[0]) &
+                 (sizes_filtrado <= faixa_area[1]))
+            ]
+
+        if quartos_sel:
+            df_filtrado = df_filtrado[df_filtrado["quartos"].isin(quartos_sel)]
+        if banheiros_sel:
+            df_filtrado = df_filtrado[df_filtrado["banheiros"].isin(banheiros_sel)]
+        if vagas_sel:
+            df_filtrado = df_filtrado[
+                df_filtrado["vagas"].isna() | df_filtrado["vagas"].isin(vagas_sel)
+            ]
+        if locais_sel:
+            df_filtrado = df_filtrado[df_filtrado["location"].isin(locais_sel)]
+
+        # --- Aplicar ordenacao ---
+        sort_col = col_map[ordenar_por]
+        if sort_col == "size":
+            df_filtrado = df_filtrado.copy()
+            df_filtrado["_size_num"] = pd.to_numeric(df_filtrado["size"], errors="coerce")
+            df_filtrado = df_filtrado.sort_values("_size_num", ascending=ascending, na_position="last")
+            df_filtrado = df_filtrado.drop(columns=["_size_num"])
+        else:
+            df_filtrado = df_filtrado.sort_values(sort_col, ascending=ascending, na_position="last")
+
+        st.caption(f"Exibindo {len(df_filtrado)} de {len(df)} imoveis")
+
+        # --- Toggle de visualizacao ---
+        visualizacao = st.radio(
+            "Visualizacao:",
+            ["Tabela", "Galeria"],
+            horizontal=True,
+        )
+
+        if visualizacao == "Tabela":
+            colunas_tabela = [c for c in df_filtrado.columns if c != "image"]
+            st.dataframe(
+                df_filtrado[colunas_tabela],
+                column_config={
+                    "title": st.column_config.TextColumn("Titulo", width="large"),
+                    "location": st.column_config.TextColumn("Localizacao", width="medium"),
+                    "price": st.column_config.NumberColumn("Aluguel (R$)", format="R$ %.2f"),
+                    "total_cost": st.column_config.NumberColumn("Custo Total (R$)", format="R$ %.2f"),
+                    "condominio": st.column_config.NumberColumn("Condominio (R$)", format="R$ %.2f"),
+                    "size": st.column_config.TextColumn("Area (m²)"),
+                    "quartos": st.column_config.TextColumn("Quartos"),
+                    "banheiros": st.column_config.TextColumn("Banheiros"),
+                    "vagas": st.column_config.TextColumn("Vagas"),
+                    "data": st.column_config.TextColumn("Data"),
+                    "link": st.column_config.LinkColumn("Link", display_text="Ver anuncio"),
+                },
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            # --- Galeria ---
+            cols_per_row = 3
+            rows = [df_filtrado.iloc[i:i+cols_per_row] for i in range(0, len(df_filtrado), cols_per_row)]
+            for row_data in rows:
+                cols = st.columns(cols_per_row)
+                for idx, (_, item) in enumerate(row_data.iterrows()):
+                    with cols[idx]:
+                        with st.container(border=True):
+                            img_url = item.get("image")
+                            if img_url:
+                                st.image(img_url, use_column_width=True)
+                            else:
+                                st.markdown("*Sem imagem disponivel*")
+
+                            st.markdown(f"**{item['title']}**")
+                            st.caption(f"{item['location']}")
+
+                            mc1, mc2 = st.columns(2)
+                            with mc1:
+                                st.metric("Custo Total", f"R$ {item['total_cost']:,.2f}")
+                            with mc2:
+                                st.metric("Aluguel", f"R$ {item['price']:,.2f}")
+
+                            detalhes = []
+                            if item.get("quartos"):
+                                detalhes.append(f"{item['quartos']} quarto(s)")
+                            if item.get("banheiros"):
+                                detalhes.append(f"{item['banheiros']} banheiro(s)")
+                            if item.get("vagas"):
+                                detalhes.append(f"{item['vagas']} vaga(s)")
+                            if item.get("size"):
+                                detalhes.append(f"{item['size']} m²")
+                            if item.get("condominio"):
+                                detalhes.append(f"Cond: R$ {item['condominio']:,.2f}")
+                            if detalhes:
+                                st.caption(" | ".join(detalhes))
+
+                            if item.get("data"):
+                                st.caption(f"Publicado: {item['data']}")
+
+                            st.link_button("Ver anuncio", item["link"], use_container_width=True)

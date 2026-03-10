@@ -1,44 +1,60 @@
 # Alugueis_olx
- 
+
 Automacao de cunho educativo e de uso pessoal.
-A olx infelizmente nao filtra apartamento pelo valor de aluguel+iptu+condominio
-entao criei um script para fazer isso.
+A OLX infelizmente nao filtra apartamentos pelo valor total de aluguel + condominio,
+entao criei essa ferramenta com interface interativa para facilitar a busca.
 
-## Baixando
+## Funcionalidades
 
-### Instalacao
+- Scraping automatico dos anuncios da OLX via Selenium
+- Calculo do custo total (aluguel + condominio)
+- Filtro por valor maximo mensal
+- Filtros interativos: custo total, aluguel, condominio, area, quartos, banheiros, vagas de garagem e localizacao
+- Ordenacao por custo total, aluguel, condominio, area ou data do anuncio
+- Visualizacao em **tabela** ou **galeria** com imagens dos anuncios
+- Metricas resumidas: total encontrados, menor custo, custo medio, maior area e media de vagas
 
-- Ambiente virtual python
+## Instalacao
+
+1. Criar ambiente virtual Python
 
     ```bash
     python -m venv venv
     ```
 
-- Ativando ambiente virtual - MacOS/Linux
+2. Ativar ambiente virtual
 
-    ```bash
-    source venv/bin/activate
-    ```
+    - MacOS/Linux:
+        ```bash
+        source venv/bin/activate
+        ```
+    - Windows:
+        ```bash
+        venv\Scripts\activate
+        ```
 
-- Ativando ambiente virtual - Windows
-
-    ```bash
-    venv\Scripts\activate
-    ```
-
-- baixar dependencias
+3. Instalar dependencias
 
     ```bash
     pip install -r requirements.txt
     ```
 
-comando de execucao:
+## Execucao
 
 ```bash
 streamlit run scrapping_v2.py
 ```
 
-## Exemplo:
+## Como usar
+
+1. Entre na OLX e filtre ao maximo os itens que deseja
+2. Coloque o valor maximo de aluguel como o valor total que pagaria (aluguel + condominio)
+3. Copie o link completo e cole na sidebar da aplicacao
+4. Clique em **Buscar**
+
+> **Obs:** caso o link termine com `ol=1`, apague esse termo antes de colar.
+
+## Exemplo
 
 ![Exemplo](./img1.png)
 ![Exemplo](./img2.png)

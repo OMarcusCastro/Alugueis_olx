@@ -17,7 +17,7 @@ import undetected_chromedriver as uc
 
 
 def create_undetected_driver(headless: bool):
-    driver = uc.Chrome(headless=headless)
+    driver = uc.Chrome(headless=headless, version_main=145)
     return driver
 
 
