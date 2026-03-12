@@ -1,9 +1,36 @@
 import time
 import json
+import os
+from datetime import datetime
 import pandas as pd
 import streamlit as st
 from selenium.webdriver.common.by import By
 from driver.driver_init import create_undetected_driver
+
+BAIRROS_CSV = "bairros_salvos.csv"
+MAX_BAIRROS_REGISTROS = 5
+
+
+def parse_date(value):
+    """Converte data da OLX para datetime. Aceita string ISO, timestamp Unix (s ou ms)."""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        if value > 1e12:
+            return datetime.fromtimestamp(value / 1000)
+        elif value > 1e9:
+            return datetime.fromtimestamp(value)
+    if isinstance(value, str):
+        for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%dT%H:%M:%S.%fZ"]:
+            try:
+                return datetime.strptime(value.split("+")[0].split(".")[0], fmt.split(".")[0])
+            except ValueError:
+                continue
+        try:
+            return pd.to_datetime(value)
+        except Exception:
+            pass
+    return None
 
 
 def rs_to_float(text):
@@ -73,7 +100,10 @@ def scrapping(link, price_limit, progress_callback=None):
                 if isinstance(images, list) and len(images) > 0:
                     image = images[0].get('original')
 
-                data_anuncio = apartamento.get('date')
+                data_update = apartamento.get('date')
+                data_criacao = apartamento.get('origListTime')
+                profissional = apartamento.get('professionalAd', False)
+                preco_reduzido = bool(apartamento.get('priceReductionBadge'))
 
                 apartamentos.append({
                     "title": apartamento['title'],
@@ -85,7 +115,10 @@ def scrapping(link, price_limit, progress_callback=None):
                     "quartos": quartos,
                     "banheiros": banheiros,
                     "vagas": vagas,
-                    "data": data_anuncio,
+                    "ultimo_update": parse_date(data_update),
+                    "criado_em": parse_date(data_criacao),
+                    "tipo_anunciante": "Imobiliaria" if profissional else "Particular",
+                    "preco_reduzido": preco_reduzido,
                     "link": apartamento['url'],
                     "image": image,
                 })
@@ -137,6 +170,8 @@ st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferr
 # --- Session state ---
 if "dados" not in st.session_state:
     st.session_state.dados = None
+if "locais_removidos" not in st.session_state:
+    st.session_state.locais_removidos = set()
 
 # --- Scraping ---
 if buscar:
@@ -167,6 +202,10 @@ if st.session_state.dados is not None:
     if df.empty:
         st.warning("Nenhum imovel encontrado com os filtros informados.")
     else:
+        # --- Converter datas para datetime (ja sao datetime, mas garantir pd.Timestamp) ---
+        df["update_dt"] = pd.to_datetime(df["ultimo_update"], errors="coerce")
+        df["criacao_dt"] = pd.to_datetime(df["criado_em"], errors="coerce")
+
         # --- Metricas ---
         st.subheader("Resumo")
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -292,16 +331,84 @@ if st.session_state.dados is not None:
         with fcol8:
             locais = sorted(df["location"].dropna().unique().tolist())
             if locais:
-                locais_sel = st.multiselect("Localizacao", options=locais, default=locais)
+                # Carregar historico de bairros salvos
+                registros_salvos = []
+                if os.path.exists(BAIRROS_CSV):
+                    df_salvos = pd.read_csv(BAIRROS_CSV)
+                    if "data_salvo" in df_salvos.columns:
+                        registros_salvos = sorted(df_salvos["data_salvo"].unique().tolist(), reverse=True)
+
+                usar_salvos = st.checkbox("Usar bairros salvos")
+                registro_escolhido = None
+                if usar_salvos and registros_salvos:
+                    registro_escolhido = st.selectbox("Registro", options=registros_salvos)
+
+                if registro_escolhido:
+                    salvos = df_salvos[df_salvos["data_salvo"] == registro_escolhido]["bairro"].tolist()
+                    default_locais = [l for l in locais if l in salvos]
+                else:
+                    default_locais = [l for l in locais if l not in st.session_state.locais_removidos]
+
+                locais_sel = st.multiselect("Localizacao", options=locais, default=default_locais)
+                st.session_state.locais_removidos = set(locais) - set(locais_sel)
+
+                if st.button("💾 Salvar bairros"):
+                    novo = pd.DataFrame({"bairro": locais_sel, "data_salvo": datetime.now().strftime("%Y-%m-%d %H:%M")})
+                    if os.path.exists(BAIRROS_CSV):
+                        existente = pd.read_csv(BAIRROS_CSV)
+                        if "data_salvo" in existente.columns:
+                            datas_unicas = sorted(existente["data_salvo"].unique().tolist(), reverse=True)
+                            if len(datas_unicas) >= MAX_BAIRROS_REGISTROS:
+                                manter = datas_unicas[:MAX_BAIRROS_REGISTROS - 1]
+                                existente = existente[existente["data_salvo"].isin(manter)]
+                            novo = pd.concat([existente, novo], ignore_index=True)
+                    novo.to_csv(BAIRROS_CSV, index=False)
+                    st.success(f"Salvos {len(locais_sel)} bairros!")
             else:
                 locais_sel = []
+
+        # Linha 4: Ultimo update, Data criacao, Tipo anunciante, Preco reduzido
+        fcol9, fcol9b, fcol10, fcol11 = st.columns(4)
+
+        with fcol9:
+            updates_validos = df["update_dt"].dropna()
+            if len(updates_validos) > 0:
+                min_upd = updates_validos.min().date()
+                data_update_filtro = st.date_input(
+                    "Ultimo update a partir de",
+                    value=min_upd,
+                )
+            else:
+                data_update_filtro = None
+
+        with fcol9b:
+            criacao_validas = df["criacao_dt"].dropna()
+            if len(criacao_validas) > 0:
+                min_cri = criacao_validas.min().date()
+                data_criacao_filtro = st.date_input(
+                    "Criado a partir de",
+                    value=min_cri,
+                )
+            else:
+                data_criacao_filtro = None
+
+        with fcol10:
+            tipos_anunciante = sorted(df["tipo_anunciante"].dropna().unique().tolist())
+            if tipos_anunciante:
+                tipo_sel = st.multiselect("Tipo de anunciante", options=tipos_anunciante, default=tipos_anunciante)
+            else:
+                tipo_sel = []
+
+        with fcol11:
+            filtro_reduzido = st.checkbox("Somente com preco reduzido")
+            remover_duplicatas = st.checkbox("Remover duplicatas (mesmo titulo)")
 
         # --- Ordenacao ---
         st.subheader("Ordenacao")
         ocol1, ocol2 = st.columns(2)
         with ocol1:
             ordenar_por = st.selectbox("Ordenar por", [
-                "Custo Total", "Aluguel", "Condominio", "Area", "Data do anuncio"
+                "Custo Total", "Aluguel", "Condominio", "Area", "Ultimo Update", "Data de Criacao"
             ])
         with ocol2:
             ordem = st.radio("Ordem", ["Crescente", "Decrescente"], horizontal=True)
@@ -311,7 +418,8 @@ if st.session_state.dados is not None:
             "Aluguel": "price",
             "Condominio": "condominio",
             "Area": "size",
-            "Data do anuncio": "data",
+            "Ultimo Update": "update_dt",
+            "Data de Criacao": "criacao_dt",
         }
         ascending = ordem == "Crescente"
 
@@ -349,6 +457,30 @@ if st.session_state.dados is not None:
         if locais_sel:
             df_filtrado = df_filtrado[df_filtrado["location"].isin(locais_sel)]
 
+        if data_update_filtro is not None:
+            upd_inicio = pd.Timestamp(data_update_filtro)
+            df_filtrado = df_filtrado[
+                (df_filtrado["update_dt"].isna()) |
+                (df_filtrado["update_dt"] >= upd_inicio)
+            ]
+
+        if data_criacao_filtro is not None:
+            cri_inicio = pd.Timestamp(data_criacao_filtro)
+            df_filtrado = df_filtrado[
+                (df_filtrado["criacao_dt"].isna()) |
+                (df_filtrado["criacao_dt"] >= cri_inicio)
+            ]
+
+        if tipo_sel:
+            df_filtrado = df_filtrado[df_filtrado["tipo_anunciante"].isin(tipo_sel)]
+
+        if filtro_reduzido:
+            df_filtrado = df_filtrado[df_filtrado["preco_reduzido"] == True]
+
+        if remover_duplicatas:
+            df_filtrado = df_filtrado.sort_values("total_cost", ascending=True, na_position="last")
+            df_filtrado = df_filtrado.drop_duplicates(subset="title", keep="first")
+
         # --- Aplicar ordenacao ---
         sort_col = col_map[ordenar_por]
         if sort_col == "size":
@@ -369,7 +501,8 @@ if st.session_state.dados is not None:
         )
 
         if visualizacao == "Tabela":
-            colunas_tabela = [c for c in df_filtrado.columns if c != "image"]
+            colunas_ocultas = ["image", "update_dt", "criacao_dt"]
+            colunas_tabela = [c for c in df_filtrado.columns if c not in colunas_ocultas]
             st.dataframe(
                 df_filtrado[colunas_tabela],
                 column_config={
@@ -382,7 +515,10 @@ if st.session_state.dados is not None:
                     "quartos": st.column_config.TextColumn("Quartos"),
                     "banheiros": st.column_config.TextColumn("Banheiros"),
                     "vagas": st.column_config.TextColumn("Vagas"),
-                    "data": st.column_config.TextColumn("Data"),
+                    "ultimo_update": st.column_config.TextColumn("Ultimo Update"),
+                    "criado_em": st.column_config.TextColumn("Criado em"),
+                    "tipo_anunciante": st.column_config.TextColumn("Anunciante"),
+                    "preco_reduzido": st.column_config.CheckboxColumn("Preco Reduzido"),
                     "link": st.column_config.LinkColumn("Link", display_text="Ver anuncio"),
                 },
                 use_container_width=True,
@@ -403,8 +539,11 @@ if st.session_state.dados is not None:
                             else:
                                 st.markdown("*Sem imagem disponivel*")
 
-                            st.markdown(f"**{item['title']}**")
-                            st.caption(f"{item['location']}")
+                            titulo = item['title']
+                            if item.get("preco_reduzido"):
+                                titulo = f"🔻 {titulo}"
+                            st.markdown(f"**{titulo}**")
+                            st.caption(f"{item['location']} | {item.get('tipo_anunciante', '')}")
 
                             mc1, mc2 = st.columns(2)
                             with mc1:
@@ -426,7 +565,12 @@ if st.session_state.dados is not None:
                             if detalhes:
                                 st.caption(" | ".join(detalhes))
 
-                            if item.get("data"):
-                                st.caption(f"Publicado: {item['data']}")
+                            datas_info = []
+                            if item.get("criado_em"):
+                                datas_info.append(f"Criado: {item['criado_em']}")
+                            if item.get("ultimo_update"):
+                                datas_info.append(f"Update: {item['ultimo_update']}")
+                            if datas_info:
+                                st.caption(" | ".join(datas_info))
 
                             st.link_button("Ver anuncio", item["link"], use_container_width=True)

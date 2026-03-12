@@ -14,26 +14,57 @@ entao criei essa ferramenta com interface interativa para facilitar a busca.
 - Visualizacao em **tabela** ou **galeria** com imagens dos anuncios
 - Metricas resumidas: total encontrados, menor custo, custo medio, maior area e media de vagas
 
+## Pre-requisitos
+
+### 1. Instalar o Python
+
+- Acesse [python.org/downloads](https://www.python.org/downloads/) e baixe a versao **3.10 ou superior**
+- Durante a instalacao no Windows, **marque a opcao "Add Python to PATH"**
+- Para verificar se instalou corretamente, abra o terminal e execute:
+
+    ```bash
+    python --version
+    ```
+
+### 2. Instalar o Google Chrome
+
+- A aplicacao usa o Chrome para fazer o scraping. Baixe em [google.com/chrome](https://www.google.com/intl/pt-BR/chrome/)
+
+### 3. Instalar o Git (opcional, para clonar o repositorio)
+
+- Baixe em [git-scm.com](https://git-scm.com/downloads)
+
 ## Instalacao
 
-1. Criar ambiente virtual Python
+1. Clonar o repositorio (ou baixar o ZIP pelo GitHub)
+
+    ```bash
+    git clone https://github.com/seu-usuario/Alugueis_olx.git
+    cd Alugueis_olx
+    ```
+
+2. Criar ambiente virtual Python
 
     ```bash
     python -m venv venv
     ```
 
-2. Ativar ambiente virtual
+3. Ativar ambiente virtual
 
     - MacOS/Linux:
         ```bash
         source venv/bin/activate
         ```
-    - Windows:
+    - Windows (CMD):
         ```bash
         venv\Scripts\activate
         ```
+    - Windows (PowerShell):
+        ```bash
+        venv\Scripts\Activate.ps1
+        ```
 
-3. Instalar dependencias
+4. Instalar dependencias
 
     ```bash
     pip install -r requirements.txt
@@ -44,6 +75,8 @@ entao criei essa ferramenta com interface interativa para facilitar a busca.
 ```bash
 streamlit run scrapping_v2.py
 ```
+
+A aplicacao vai abrir automaticamente no navegador em `http://localhost:8501`.
 
 ## Como usar
 
