@@ -1,6 +1,5 @@
 import time
 import json
-import os
 import re
 from datetime import datetime
 import pandas as pd
@@ -406,39 +405,23 @@ if st.session_state.dados is not None:
         with fcol8:
             locais = sorted(df["location"].dropna().unique().tolist())
             if locais:
-                # Carregar historico de bairros salvos
-                registros_salvos = []
-                if os.path.exists(BAIRROS_CSV):
-                    df_salvos = pd.read_csv(BAIRROS_CSV)
-                    if "data_salvo" in df_salvos.columns:
-                        registros_salvos = sorted(df_salvos["data_salvo"].unique().tolist(), reverse=True)
+                # Carregar bairros salvos do localStorage
+                from streamlit_js_eval import streamlit_js_eval
+                bairros_salvos_json = streamlit_js_eval(js_expressions="localStorage.getItem('bairros_salvos')", key="load_bairros")
 
                 usar_salvos = st.checkbox("Usar bairros salvos")
-                registro_escolhido = None
-                if usar_salvos and registros_salvos:
-                    registro_escolhido = st.selectbox("Registro", options=registros_salvos)
-
-                if registro_escolhido:
-                    salvos = df_salvos[df_salvos["data_salvo"] == registro_escolhido]["bairro"].tolist()
+                if usar_salvos and bairros_salvos_json:
+                    salvos = json.loads(bairros_salvos_json)
                     default_locais = [l for l in locais if l in salvos]
                 else:
-                    default_locais = [l for l in locais if l not in st.session_state.locais_removidos]
+                    default_locais = locais
 
                 locais_sel = st.multiselect("Localizacao", options=locais, default=default_locais)
-                st.session_state.locais_removidos = set(locais) - set(locais_sel)
 
-                if st.button("💾 Salvar bairros"):
-                    novo = pd.DataFrame({"bairro": locais_sel, "data_salvo": datetime.now().strftime("%Y-%m-%d %H:%M")})
-                    if os.path.exists(BAIRROS_CSV):
-                        existente = pd.read_csv(BAIRROS_CSV)
-                        if "data_salvo" in existente.columns:
-                            datas_unicas = sorted(existente["data_salvo"].unique().tolist(), reverse=True)
-                            if len(datas_unicas) >= MAX_BAIRROS_REGISTROS:
-                                manter = datas_unicas[:MAX_BAIRROS_REGISTROS - 1]
-                                existente = existente[existente["data_salvo"].isin(manter)]
-                            novo = pd.concat([existente, novo], ignore_index=True)
-                    novo.to_csv(BAIRROS_CSV, index=False)
-                    st.success(f"Salvos {len(locais_sel)} bairros!")
+                if st.button("Salvar bairros"):
+                    bairros_json = json.dumps(locais_sel)
+                    streamlit_js_eval(js_expressions=f"localStorage.setItem('bairros_salvos', '{bairros_json}')", key="save_bairros")
+                    st.success(f"Salvos {len(locais_sel)} bairros no navegador!")
             else:
                 locais_sel = []
 
