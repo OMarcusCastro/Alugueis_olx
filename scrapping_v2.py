@@ -113,17 +113,17 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
 
     first_page = _fetch_page_curl(link)
     ads_data = first_page['props']['pageProps']['ads']
-    total_ads = first_page['props']['pageProps'].get('totalAds', 50)
+    total_ads = first_page['props']['pageProps'].get('totalAds', 0)
     last_page_number = max(1, min((total_ads + 49) // 50, 100))
     apartamentos = []
     erros = 0
+    log_msgs = []
 
-    if progress_callback:
-        progress_callback(1, last_page_number, info=f"{total_ads} anuncios encontrados, {last_page_number} paginas")
+    log_msgs.append(f"totalAds={total_ads}, paginas={last_page_number}, ads_pag1={len(ads_data)}")
 
     for i in range(1, last_page_number + 1):
         if progress_callback:
-            progress_callback(i, last_page_number)
+            progress_callback(i, last_page_number, info=f"totalAds={total_ads} | {len(apartamentos)} coletados")
 
         if i == 1:
             dados = ads_data
@@ -133,25 +133,25 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
                 page_url = f"{link}&o={i}" if "?" in link else f"{link}?o={i}"
                 page_data = _fetch_page_curl(page_url)
                 dados = page_data['props']['pageProps']['ads']
+                log_msgs.append(f"pag {i}: {len(dados)} ads OK")
             except Exception as e:
+                log_msgs.append(f"pag {i}: erro1 - {e}")
                 # Retry com backoff
                 time.sleep(random.uniform(5.0, 8.0))
                 try:
                     page_data = _fetch_page_curl(page_url)
                     dados = page_data['props']['pageProps']['ads']
-                except Exception:
+                    log_msgs.append(f"pag {i}: retry OK, {len(dados)} ads")
+                except Exception as e2:
                     erros += 1
-                    if progress_callback:
-                        progress_callback(i, last_page_number, info=f"Pagina {i} falhou: {e}")
+                    log_msgs.append(f"pag {i}: retry falhou - {e2}")
                     continue
 
         for apartamento in dados:
             _parse_apartamento(apartamento, price_limit, apartamentos)
 
-    if erros > 0 and progress_callback:
-        progress_callback(last_page_number, last_page_number, info=f"{erros} paginas falharam")
-
-    return pd.DataFrame(apartamentos)
+    log_msgs.append(f"TOTAL: {len(apartamentos)} apartamentos, {erros} paginas falharam")
+    return pd.DataFrame(apartamentos), log_msgs
 
 
 def _scrapping_driver(link, price_limit, progress_callback=None):
@@ -178,7 +178,7 @@ def _scrapping_driver(link, price_limit, progress_callback=None):
             _parse_apartamento(apartamento, price_limit, apartamentos)
 
     driver.quit()
-    return pd.DataFrame(apartamentos)
+    return pd.DataFrame(apartamentos), [f"driver: {last_page_number} paginas, {len(apartamentos)} apartamentos"]
 
 
 def _parse_apartamento(apartamento, price_limit, apartamentos):
@@ -369,9 +369,12 @@ if buscar:
                 progress_text.text(msg)
 
             try:
-                data = scrapping(link, valor_maximo, progress_callback=update_progress)
+                data, log_msgs = scrapping(link, valor_maximo, progress_callback=update_progress)
                 st.session_state.dados = data
                 status.update(label="Busca finalizada!", state="complete", expanded=False)
+                with st.expander("Log do scraping", expanded=False):
+                    for msg in log_msgs:
+                        st.text(msg)
             except Exception as e:
                 status.update(label="Erro durante a busca", state="error", expanded=True)
                 st.error(f"Ocorreu um erro: {e}")
