@@ -1,11 +1,12 @@
 import time
 import json
 import os
+import re
 from datetime import datetime
 import pandas as pd
 import streamlit as st
 from selenium.webdriver.common.by import By
-from driver.driver_init import create_undetected_driver
+from driver.driver_init import create_undetected_driver, _is_docker
 
 BAIRROS_CSV = "bairros_salvos.csv"
 MAX_BAIRROS_REGISTROS = 5
@@ -55,6 +56,17 @@ def get_last_page_number(pagination_list):
     return int(last_page_link.split("o=")[-1])
 
 
+def _fetch_page_curl(url):
+    """Busca dados da pagina OLX via curl_cffi (bypassa Cloudflare)."""
+    from curl_cffi import requests as curl_requests
+    resp = curl_requests.get(url, impersonate="chrome", timeout=30)
+    resp.raise_for_status()
+    match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text)
+    if not match:
+        raise Exception("Nao foi possivel extrair dados da pagina OLX")
+    return json.loads(match.group(1))
+
+
 def _wait_for_element(driver, by, value, timeout=20):
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
@@ -63,98 +75,119 @@ def _wait_for_element(driver, by, value, timeout=20):
     )
 
 
-def scrapping(link, price_limit, progress_callback=None):
-    driver = create_undetected_driver(headless=False)
-    driver.get(link)
-    time.sleep(8)
-
-    # Tentar pegar numero de paginas via paginacao ou via __NEXT_DATA__
-    try:
-        pagination_list = _wait_for_element(driver, By.ID, "listing-pagination", timeout=15)
-        last_page_number = get_last_page_number(pagination_list)
-    except Exception:
-        # Fallback: tentar extrair do __NEXT_DATA__
-        try:
-            next_data = json.loads(driver.find_element(
-                By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
-            total_ads = next_data['props']['pageProps'].get('totalAds', 50)
-            last_page_number = max(1, min((total_ads + 49) // 50, 100))
-        except Exception:
-            raise Exception(f"OLX bloqueou o acesso. Titulo da pagina: {driver.title}")
-
+def _scrapping_curl(link, price_limit, progress_callback=None):
+    """Scrapping via curl_cffi (para Docker/servidor)."""
+    first_page = _fetch_page_curl(link)
+    ads_data = first_page['props']['pageProps']['ads']
+    total_ads = first_page['props']['pageProps'].get('totalAds', 50)
+    last_page_number = max(1, min((total_ads + 49) // 50, 100))
     apartamentos = []
 
-    for i in range(1, last_page_number+1):
+    for i in range(1, last_page_number + 1):
+        if progress_callback:
+            progress_callback(i, last_page_number)
+
+        if i == 1:
+            dados = ads_data
+        else:
+            time.sleep(1.5)
+            try:
+                page_url = f"{link}&o={i}" if "?" in link else f"{link}?o={i}"
+                page_data = _fetch_page_curl(page_url)
+                dados = page_data['props']['pageProps']['ads']
+            except Exception:
+                print(f"Erro ao carregar pagina {i}, pulando...")
+                continue
+
+        for apartamento in dados:
+            _parse_apartamento(apartamento, price_limit, apartamentos)
+
+    return pd.DataFrame(apartamentos)
+
+
+def _scrapping_driver(link, price_limit, progress_callback=None):
+    """Scrapping via Selenium/undetected-chromedriver (para uso local)."""
+    driver = create_undetected_driver(headless=False)
+    driver.get(link)
+    pagination_list = driver.find_element(By.ID, "listing-pagination")
+    last_page_number = get_last_page_number(pagination_list)
+    apartamentos = []
+
+    for i in range(1, last_page_number + 1):
         if progress_callback:
             progress_callback(i, last_page_number)
 
         time.sleep(0.6)
         driver.get(f"{link}&o={i}")
-        time.sleep(8)
-        try:
-            dados = json.loads(_wait_for_element(driver, By.ID, "__NEXT_DATA__", timeout=15)
-                               .get_attribute("innerHTML"))
-            dados = dados['props']['pageProps']['ads']
-        except Exception:
-            print(f"Erro ao carregar pagina {i}, pulando...")
-            continue
+        time.sleep(5)
+        dados = json.loads(driver.find_element(
+            By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
+        dados = dados['props']['pageProps']['ads']
 
         for apartamento in dados:
-            try:
-                condominio, size, quartos, banheiros, vagas = None, None, None, None, None
-                for elemento in apartamento['properties']:
-                    if elemento["name"] == 'condominio':
-                        condominio = rs_to_float(elemento['value'])
-                    elif elemento["name"] == 'size':
-                        size = elemento['value']
-                    elif elemento["name"] == 'rooms':
-                        quartos = elemento['value']
-                    elif elemento["name"] == 'bathrooms':
-                        banheiros = elemento['value']
-                    elif elemento["name"] == 'garage_spaces':
-                        vagas = elemento['value']
-
-                price = rs_to_float(apartamento['price'])
-                total_cost = price
-                if condominio:
-                    total_cost += condominio
-                if total_cost > price_limit:
-                    continue
-
-                image = None
-                images = apartamento.get('images') or []
-                if isinstance(images, list) and len(images) > 0:
-                    image = images[0].get('original')
-
-                data_update = apartamento.get('date')
-                data_criacao = apartamento.get('origListTime')
-                profissional = apartamento.get('professionalAd', False)
-                preco_reduzido = bool(apartamento.get('priceReductionBadge'))
-
-                apartamentos.append({
-                    "title": apartamento['title'],
-                    "location": apartamento['location'],
-                    "price": price,
-                    "total_cost": total_cost,
-                    "condominio": condominio,
-                    "size": size,
-                    "quartos": quartos,
-                    "banheiros": banheiros,
-                    "vagas": vagas,
-                    "ultimo_update": parse_date(data_update),
-                    "criado_em": parse_date(data_criacao),
-                    "tipo_anunciante": "Imobiliaria" if profissional else "Particular",
-                    "preco_reduzido": preco_reduzido,
-                    "link": apartamento['url'],
-                    "image": image,
-                })
-            except Exception as e:
-                print(e)
-                continue
+            _parse_apartamento(apartamento, price_limit, apartamentos)
 
     driver.quit()
-    df = pd.DataFrame(apartamentos)
-    return df
+    return pd.DataFrame(apartamentos)
+
+
+def _parse_apartamento(apartamento, price_limit, apartamentos):
+    try:
+        condominio, size, quartos, banheiros, vagas = None, None, None, None, None
+        for elemento in apartamento['properties']:
+            if elemento["name"] == 'condominio':
+                condominio = rs_to_float(elemento['value'])
+            elif elemento["name"] == 'size':
+                size = elemento['value']
+            elif elemento["name"] == 'rooms':
+                quartos = elemento['value']
+            elif elemento["name"] == 'bathrooms':
+                banheiros = elemento['value']
+            elif elemento["name"] == 'garage_spaces':
+                vagas = elemento['value']
+
+        price = rs_to_float(apartamento['price'])
+        total_cost = price
+        if condominio:
+            total_cost += condominio
+        if total_cost > price_limit:
+            return
+
+        image = None
+        images = apartamento.get('images') or []
+        if isinstance(images, list) and len(images) > 0:
+            image = images[0].get('original')
+
+        data_update = apartamento.get('date')
+        data_criacao = apartamento.get('origListTime')
+        profissional = apartamento.get('professionalAd', False)
+        preco_reduzido = bool(apartamento.get('priceReductionBadge'))
+
+        apartamentos.append({
+            "title": apartamento['title'],
+            "location": apartamento['location'],
+            "price": price,
+            "total_cost": total_cost,
+            "condominio": condominio,
+            "size": size,
+            "quartos": quartos,
+            "banheiros": banheiros,
+            "vagas": vagas,
+            "ultimo_update": parse_date(data_update),
+            "criado_em": parse_date(data_criacao),
+            "tipo_anunciante": "Imobiliaria" if profissional else "Particular",
+            "preco_reduzido": preco_reduzido,
+            "link": apartamento['url'],
+            "image": image,
+        })
+    except Exception as e:
+        print(e)
+
+
+def scrapping(link, price_limit, progress_callback=None):
+    if _is_docker():
+        return _scrapping_curl(link, price_limit, progress_callback)
+    return _scrapping_driver(link, price_limit, progress_callback)
 
 
 # --- Page config ---
