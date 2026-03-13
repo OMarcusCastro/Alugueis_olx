@@ -3,6 +3,7 @@ import time
 import json
 import re
 import base64
+import random
 from datetime import datetime, date
 import pandas as pd
 import streamlit as st
@@ -70,10 +71,26 @@ def get_last_page_number(pagination_list):
     return int(last_page_link.split("o=")[-1])
 
 
+_BROWSER_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Cache-Control": "no-cache",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+_IMPERSONATE_PROFILES = ["chrome110", "chrome116", "chrome120", "chrome124"]
+
+
 def _fetch_page_curl(url):
     """Busca dados da pagina OLX via curl_cffi (bypassa Cloudflare)."""
     from curl_cffi import requests as curl_requests
-    resp = curl_requests.get(url, impersonate="chrome", timeout=30)
+    profile = random.choice(_IMPERSONATE_PROFILES)
+    resp = curl_requests.get(url, impersonate=profile, headers=_BROWSER_HEADERS, timeout=30)
     resp.raise_for_status()
     match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text)
     if not match:
@@ -91,11 +108,18 @@ def _wait_for_element(driver, by, value, timeout=20):
 
 def _scrapping_curl(link, price_limit, progress_callback=None):
     """Scrapping via curl_cffi (para Docker/servidor)."""
+    # Limpar ol=1 do link se presente
+    link = re.sub(r'[&?]ol=\d+', '', link)
+
     first_page = _fetch_page_curl(link)
     ads_data = first_page['props']['pageProps']['ads']
     total_ads = first_page['props']['pageProps'].get('totalAds', 50)
     last_page_number = max(1, min((total_ads + 49) // 50, 100))
     apartamentos = []
+    erros = 0
+
+    if progress_callback:
+        progress_callback(1, last_page_number, info=f"{total_ads} anuncios encontrados, {last_page_number} paginas")
 
     for i in range(1, last_page_number + 1):
         if progress_callback:
@@ -104,23 +128,35 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
         if i == 1:
             dados = ads_data
         else:
-            time.sleep(1.5)
+            time.sleep(random.uniform(2.0, 4.0))
             try:
                 page_url = f"{link}&o={i}" if "?" in link else f"{link}?o={i}"
                 page_data = _fetch_page_curl(page_url)
                 dados = page_data['props']['pageProps']['ads']
-            except Exception:
-                print(f"Erro ao carregar pagina {i}, pulando...")
-                continue
+            except Exception as e:
+                # Retry com backoff
+                time.sleep(random.uniform(5.0, 8.0))
+                try:
+                    page_data = _fetch_page_curl(page_url)
+                    dados = page_data['props']['pageProps']['ads']
+                except Exception:
+                    erros += 1
+                    if progress_callback:
+                        progress_callback(i, last_page_number, info=f"Pagina {i} falhou: {e}")
+                    continue
 
         for apartamento in dados:
             _parse_apartamento(apartamento, price_limit, apartamentos)
+
+    if erros > 0 and progress_callback:
+        progress_callback(last_page_number, last_page_number, info=f"{erros} paginas falharam")
 
     return pd.DataFrame(apartamentos)
 
 
 def _scrapping_driver(link, price_limit, progress_callback=None):
     """Scrapping via Selenium/undetected-chromedriver (para uso local)."""
+    link = re.sub(r'[&?]ol=\d+', '', link)
     driver = create_undetected_driver(headless=False)
     driver.get(link)
     pagination_list = driver.find_element(By.ID, "listing-pagination")
@@ -325,9 +361,12 @@ if buscar:
             progress_bar = st.progress(0)
             progress_text = st.empty()
 
-            def update_progress(current, total):
+            def update_progress(current, total, info=None):
                 progress_bar.progress(current / total)
-                progress_text.text(f"Buscando pagina {current} de {total}...")
+                msg = f"Buscando pagina {current} de {total}..."
+                if info:
+                    msg += f" ({info})"
+                progress_text.text(msg)
 
             try:
                 data = scrapping(link, valor_maximo, progress_callback=update_progress)
