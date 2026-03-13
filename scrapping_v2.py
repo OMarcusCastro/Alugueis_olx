@@ -55,11 +55,33 @@ def get_last_page_number(pagination_list):
     return int(last_page_link.split("o=")[-1])
 
 
+def _wait_for_element(driver, by, value, timeout=20):
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    return WebDriverWait(driver, timeout).until(
+        EC.presence_of_element_located((by, value))
+    )
+
+
 def scrapping(link, price_limit, progress_callback=None):
     driver = create_undetected_driver(headless=False)
     driver.get(link)
-    pagination_list = driver.find_element(By.ID, "listing-pagination")
-    last_page_number = get_last_page_number(pagination_list)
+    time.sleep(8)
+
+    # Tentar pegar numero de paginas via paginacao ou via __NEXT_DATA__
+    try:
+        pagination_list = _wait_for_element(driver, By.ID, "listing-pagination", timeout=15)
+        last_page_number = get_last_page_number(pagination_list)
+    except Exception:
+        # Fallback: tentar extrair do __NEXT_DATA__
+        try:
+            next_data = json.loads(driver.find_element(
+                By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
+            total_ads = next_data['props']['pageProps'].get('totalAds', 50)
+            last_page_number = max(1, min((total_ads + 49) // 50, 100))
+        except Exception:
+            raise Exception(f"OLX bloqueou o acesso. Titulo da pagina: {driver.title}")
+
     apartamentos = []
 
     for i in range(1, last_page_number+1):
@@ -68,10 +90,14 @@ def scrapping(link, price_limit, progress_callback=None):
 
         time.sleep(0.6)
         driver.get(f"{link}&o={i}")
-        time.sleep(5)
-        dados = json.loads(driver.find_element(
-            By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
-        dados = dados['props']['pageProps']['ads']
+        time.sleep(8)
+        try:
+            dados = json.loads(_wait_for_element(driver, By.ID, "__NEXT_DATA__", timeout=15)
+                               .get_attribute("innerHTML"))
+            dados = dados['props']['pageProps']['ads']
+        except Exception:
+            print(f"Erro ao carregar pagina {i}, pulando...")
+            continue
 
         for apartamento in dados:
             try:
