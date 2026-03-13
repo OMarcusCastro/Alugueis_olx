@@ -43,26 +43,15 @@ def _is_docker():
 
 
 def create_undetected_driver(headless: bool):
+    options = uc.ChromeOptions()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
     if _is_docker():
-        # Em container, usa selenium puro (undetected-chromedriver nao funciona bem)
-        options = webdriver.ChromeOptions()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        driver = webdriver.Chrome(options=options)
-        driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-        return driver
-    else:
-        options = uc.ChromeOptions()
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        version = _detect_chrome_version()
-        driver = uc.Chrome(headless=headless, options=options, version_main=version)
-        return driver
+        options.add_argument("--single-process")
+    version = _detect_chrome_version()
+    driver = uc.Chrome(headless=headless, options=options, version_main=version)
+    return driver
 
 
 def create_driver():
