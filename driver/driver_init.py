@@ -47,8 +47,10 @@ def create_undetected_driver(headless: bool):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     if _is_docker():
+        headless = True
         options.add_argument("--disable-gpu")
-        options.add_argument("--single-process")
+        options.add_argument("--remote-debugging-port=0")
+        options.add_argument("--window-size=1920,1080")
     version = _detect_chrome_version()
     driver = uc.Chrome(headless=headless, options=options, version_main=version)
     return driver

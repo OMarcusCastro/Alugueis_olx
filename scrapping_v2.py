@@ -1,13 +1,11 @@
 import time
 import json
 import os
-import re
 from datetime import datetime
 import pandas as pd
-import cloudscraper
 import streamlit as st
 from selenium.webdriver.common.by import By
-from driver.driver_init import create_undetected_driver, _is_docker
+from driver.driver_init import create_undetected_driver
 
 BAIRROS_CSV = "bairros_salvos.csv"
 MAX_BAIRROS_REGISTROS = 5
@@ -57,58 +55,23 @@ def get_last_page_number(pagination_list):
     return int(last_page_link.split("o=")[-1])
 
 
-_scraper = cloudscraper.create_scraper()
-
-
-def _fetch_page_data_requests(url):
-    """Busca dados da pagina OLX via cloudscraper, extraindo __NEXT_DATA__."""
-    resp = _scraper.get(url, timeout=30)
-    resp.raise_for_status()
-    match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text)
-    if not match:
-        raise Exception("Nao foi possivel extrair dados da pagina OLX")
-    return json.loads(match.group(1))
-
-
 def scrapping(link, price_limit, progress_callback=None):
-    use_requests = _is_docker()
-
-    if use_requests:
-        # Via requests (Docker/Railway)
-        first_page = _fetch_page_data_requests(link)
-        ads_data = first_page['props']['pageProps']['ads']
-        # Descobrir ultima pagina pelo total de resultados
-        total_ads = first_page['props']['pageProps'].get('totalAds', 0)
-        last_page_number = max(1, (total_ads + 49) // 50)  # OLX mostra ~50 por pagina
-        # Limitar a 100 paginas
-        last_page_number = min(last_page_number, 100)
-    else:
-        # Via Selenium (local)
-        driver = create_undetected_driver(headless=False)
-        driver.get(link)
-        pagination_list = driver.find_element(By.ID, "listing-pagination")
-        last_page_number = get_last_page_number(pagination_list)
-
+    driver = create_undetected_driver(headless=False)
+    driver.get(link)
+    pagination_list = driver.find_element(By.ID, "listing-pagination")
+    last_page_number = get_last_page_number(pagination_list)
     apartamentos = []
 
     for i in range(1, last_page_number+1):
         if progress_callback:
             progress_callback(i, last_page_number)
 
-        if use_requests:
-            time.sleep(1)
-            if i == 1:
-                dados = ads_data
-            else:
-                page_data = _fetch_page_data_requests(f"{link}&o={i}")
-                dados = page_data['props']['pageProps']['ads']
-        else:
-            time.sleep(0.6)
-            driver.get(f"{link}&o={i}")
-            time.sleep(5)
-            dados = json.loads(driver.find_element(
-                By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
-            dados = dados['props']['pageProps']['ads']
+        time.sleep(0.6)
+        driver.get(f"{link}&o={i}")
+        time.sleep(5)
+        dados = json.loads(driver.find_element(
+            By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
+        dados = dados['props']['pageProps']['ads']
 
         for apartamento in dados:
             try:
@@ -163,8 +126,7 @@ def scrapping(link, price_limit, progress_callback=None):
                 print(e)
                 continue
 
-    if not use_requests:
-        driver.quit()
+    driver.quit()
     df = pd.DataFrame(apartamentos)
     return df
 
