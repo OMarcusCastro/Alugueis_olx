@@ -245,16 +245,28 @@ if "bairros_version" not in st.session_state:
     st.session_state.bairros_version = 0
 if "shared_filters" not in st.session_state:
     st.session_state.shared_filters = None
-if "auto_scraped" not in st.session_state:
-    st.session_state.auto_scraped = False
+if "auto_scrape_link" not in st.session_state:
+    st.session_state.auto_scrape_link = None
+    st.session_state.auto_scrape_vm = None
 
 # --- Decodificar estado compartilhado da URL ---
-qp = st.query_params
-if "s" in qp and not st.session_state.auto_scraped:
+try:
+    _raw_s = st.query_params.get("s", None)
+except Exception:
+    _raw_s = None
+
+if _raw_s and st.session_state.shared_filters is None:
     try:
-        st.session_state.shared_filters = _decode_state(qp["s"])
+        st.session_state.shared_filters = _decode_state(_raw_s)
+        sf = st.session_state.shared_filters
+        st.session_state.auto_scrape_link = sf.get("link")
+        st.session_state.auto_scrape_vm = sf.get("vm", 3000.0)
+        # Limpar query params para evitar interferencia
+        st.query_params.clear()
+        st.rerun()
     except Exception:
         st.session_state.shared_filters = None
+        st.query_params.clear()
 
 # --- Header e busca (sempre visivel) ---
 st.title("Busca de Imoveis OLX")
@@ -287,13 +299,16 @@ with st.expander("Como usar", expanded=expanded):
 st.markdown("---")
 
 _sf = st.session_state.shared_filters or {}
-link = st.text_input("Link da busca na OLX:", value=_sf.get("link", ""), placeholder="Cole o link da OLX aqui...")
+_default_link = st.session_state.auto_scrape_link or ""
+_default_vm = float(st.session_state.auto_scrape_vm or _sf.get("vm", 3000.0))
+
+link = st.text_input("Link da busca na OLX:", value=_default_link, placeholder="Cole o link da OLX aqui...")
 col_val, col_btn = st.columns([3, 1])
 with col_val:
     valor_maximo = st.number_input(
         "Valor maximo mensal (R$):",
         min_value=0.0,
-        value=float(_sf.get("vm", 3000.0)),
+        value=_default_vm,
         step=100.0,
         format="%.2f",
     )
@@ -302,9 +317,8 @@ with col_btn:
     buscar = st.button("Buscar", use_container_width=True, type="primary")
 
 # Auto-scrape quando abre link compartilhado
-if _sf.get("link") and not st.session_state.auto_scraped and st.session_state.dados is None:
+if st.session_state.auto_scrape_link and st.session_state.dados is None:
     buscar = True
-    st.session_state.auto_scraped = True
 
 if st.session_state.dados is None and not buscar:
     st.info("**Dica:** caso o link termine com `ol=1`, apague esse trecho antes de colar.")
@@ -325,11 +339,15 @@ if buscar:
             try:
                 data = scrapping(link, valor_maximo, progress_callback=update_progress)
                 st.session_state.dados = data
+                st.session_state.auto_scrape_link = None
+                st.session_state.auto_scrape_vm = None
                 status.update(label="Busca finalizada!", state="complete", expanded=False)
             except Exception as e:
                 status.update(label="Erro durante a busca", state="error", expanded=True)
                 st.error(f"Ocorreu um erro: {e}")
                 st.session_state.dados = None
+                st.session_state.auto_scrape_link = None
+                st.session_state.auto_scrape_vm = None
 
 # --- Results ---
 if st.session_state.dados is not None:
