@@ -6,6 +6,15 @@ RUN apt-get update && apt-get install -y wget gnupg2 \
     && apt-get update && apt-get install -y google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
 
+RUN CHROME_VERSION=$(google-chrome --version | grep -oP '\d+') \
+    && wget -q "https://storage.googleapis.com/chrome-for-testing-public/$(google-chrome --version | grep -oP '[\d.]+')/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip \
+    || wget -q "https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/$(google-chrome --version | grep -oP '[\d.]+')/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip \
+    ; apt-get update && apt-get install -y unzip \
+    && unzip -o /tmp/chromedriver.zip -d /tmp/ \
+    && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/ \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf /tmp/chromedriver* /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
