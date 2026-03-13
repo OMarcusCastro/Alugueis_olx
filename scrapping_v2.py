@@ -252,6 +252,10 @@ if "shared_filters" not in st.session_state:
     except Exception:
         pass
 
+# Buscar base URL do navegador (executa sempre para estar disponivel)
+from streamlit_js_eval import streamlit_js_eval
+_base_url = streamlit_js_eval(js_expressions="window.location.origin + window.location.pathname", key="get_base_url")
+
 # --- Header e busca (sempre visivel) ---
 st.title("Busca de Imoveis OLX")
 st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferramenta resolve isso.")
@@ -677,10 +681,6 @@ if st.session_state.dados is not None:
         colunas_ocultas = ["image", "update_dt", "criacao_dt"]
         colunas_tabela = [c for c in df_filtrado.columns if c not in colunas_ocultas]
         csv_data = df_filtrado[colunas_tabela].to_csv(index=False).encode("utf-8")
-
-        # Buscar base URL do navegador
-        from streamlit_js_eval import streamlit_js_eval
-        _base_url = streamlit_js_eval(js_expressions="window.location.origin + window.location.pathname", key="get_base_url")
 
         dl_col1, dl_col2, dl_col3 = st.columns([1, 1, 3])
         with dl_col1:
