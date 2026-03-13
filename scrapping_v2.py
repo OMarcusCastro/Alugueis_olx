@@ -112,13 +112,40 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
     link = re.sub(r'[&?]ol=\d+', '', link)
 
     first_page = _fetch_page_curl(link)
-    ads_data = first_page['props']['pageProps']['ads']
-    total_ads = first_page['props']['pageProps'].get('totalAds', 0)
+    page_props = first_page['props']['pageProps']
+    ads_data = page_props['ads']
+
+    # Descobrir totalAds (OLX muda o nome as vezes)
+    total_ads = (
+        page_props.get('totalAds') or
+        page_props.get('totalOfAds') or
+        page_props.get('totalResults') or
+        page_props.get('total') or
+        0
+    )
+
+    # Se nao encontrou, tentar em sub-objetos
+    if total_ads == 0:
+        for key in ['search', 'searchResult', 'listing', 'pagination']:
+            if key in page_props and isinstance(page_props[key], dict):
+                total_ads = (
+                    page_props[key].get('totalAds') or
+                    page_props[key].get('totalOfAds') or
+                    page_props[key].get('total') or
+                    page_props[key].get('totalResults') or
+                    0
+                )
+                if total_ads:
+                    break
+
     last_page_number = max(1, min((total_ads + 49) // 50, 100))
     apartamentos = []
     erros = 0
     log_msgs = []
 
+    # Logar keys de pageProps para diagnostico
+    pp_keys = [k for k in page_props.keys() if k != 'ads']
+    log_msgs.append(f"pageProps keys: {pp_keys}")
     log_msgs.append(f"totalAds={total_ads}, paginas={last_page_number}, ads_pag1={len(ads_data)}")
 
     for i in range(1, last_page_number + 1):
@@ -371,14 +398,18 @@ if buscar:
             try:
                 data, log_msgs = scrapping(link, valor_maximo, progress_callback=update_progress)
                 st.session_state.dados = data
+                st.session_state._scrape_log = log_msgs
                 status.update(label="Busca finalizada!", state="complete", expanded=False)
-                with st.expander("Log do scraping", expanded=False):
-                    for msg in log_msgs:
-                        st.text(msg)
             except Exception as e:
                 status.update(label="Erro durante a busca", state="error", expanded=True)
                 st.error(f"Ocorreu um erro: {e}")
                 st.session_state.dados = None
+
+        # Log fora do st.status
+        if "_scrape_log" in st.session_state and st.session_state._scrape_log:
+            with st.expander("Log do scraping", expanded=False):
+                for msg in st.session_state._scrape_log:
+                    st.text(msg)
 
 # --- Results ---
 if st.session_state.dados is not None:
