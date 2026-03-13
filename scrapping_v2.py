@@ -197,45 +197,77 @@ st.set_page_config(
     layout="wide",
 )
 
-# --- Sidebar ---
-with st.sidebar:
-    st.header("Busca de Imoveis")
-    st.caption("Filtre imoveis pelo custo total (aluguel + condominio)")
-
-    link = st.text_input("Link da OLX:", placeholder="Cole o link da busca da OLX aqui")
-    valor_maximo = st.number_input(
-        "Valor maximo mensal (R$):",
-        min_value=0.0,
-        value=3000.0,
-        step=100.0,
-        format="%.2f",
-    )
-    buscar = st.button("Buscar", use_container_width=True, type="primary")
-
-    with st.expander("Como usar?"):
-        st.markdown("""
-1. Entre na **OLX** e filtre ao maximo os itens que deseja
-2. Coloque o valor maximo como o **valor total** que pagaria (aluguel + condominio)
-3. Copie o **link completo** e cole acima
-4. Clique em **Buscar**
-
-> **Obs:** caso o link termine com `ol=1`, apague esse termo antes de colar.
-""")
-
-# --- Main area ---
-st.title("Busca de Imoveis OLX")
-st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferramenta resolve isso.")
-
 # --- Session state ---
 if "dados" not in st.session_state:
     st.session_state.dados = None
 if "locais_removidos" not in st.session_state:
     st.session_state.locais_removidos = set()
 
+# --- Tela inicial (onboarding) ou sidebar para nova busca ---
+if st.session_state.dados is None:
+    # Tela principal com instrucoes
+    st.title("Busca de Imoveis OLX")
+    st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferramenta resolve isso.")
+    st.markdown("---")
+    st.subheader("Como usar")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**1. Pesquise na OLX**")
+        st.markdown(
+            "Acesse [olx.com.br](https://www.olx.com.br) e busque imoveis para alugar. "
+            "Filtre por **regiao/cidade**, **tipo do imovel**, **metragem minima** e "
+            "coloque o **valor maximo de aluguel** como o total que voce pagaria (aluguel + condominio)."
+        )
+    with col2:
+        st.markdown("**2. Copie o link**")
+        st.markdown(
+            "Depois de aplicar todos os filtros desejados na OLX, copie o **link completo** "
+            "da barra de enderecos do seu navegador."
+        )
+    with col3:
+        st.markdown("**3. Cole aqui e busque**")
+        st.markdown(
+            "Cole o link abaixo, defina o valor maximo mensal que aceita pagar e clique em **Buscar**. "
+            "Nos calculamos o custo real (aluguel + condominio) de cada imovel para voce."
+        )
+
+    st.markdown("---")
+
+    link = st.text_input("Link da busca na OLX:", placeholder="Cole o link da OLX aqui...")
+    col_val, col_btn = st.columns([3, 1])
+    with col_val:
+        valor_maximo = st.number_input(
+            "Valor maximo mensal (R$):",
+            min_value=0.0,
+            value=3000.0,
+            step=100.0,
+            format="%.2f",
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        buscar = st.button("Buscar", use_container_width=True, type="primary")
+
+    st.info("**Dica:** caso o link termine com `ol=1`, apague esse trecho antes de colar.")
+else:
+    # Sidebar para nova busca quando ja tem dados
+    with st.sidebar:
+        st.header("Nova busca")
+        link = st.text_input("Link da OLX:", placeholder="Cole o link da busca da OLX aqui")
+        valor_maximo = st.number_input(
+            "Valor maximo mensal (R$):",
+            min_value=0.0,
+            value=3000.0,
+            step=100.0,
+            format="%.2f",
+        )
+        buscar = st.button("Buscar", use_container_width=True, type="primary")
+    st.title("Busca de Imoveis OLX")
+
 # --- Scraping ---
 if buscar:
     if not link:
-        st.error("Por favor, cole o link da busca da OLX na sidebar.")
+        st.error("Por favor, cole o link da busca da OLX.")
     else:
         with st.status("Buscando imoveis...", expanded=True) as status:
             progress_bar = st.progress(0)
