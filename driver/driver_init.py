@@ -16,8 +16,33 @@ from selenium.webdriver.support.ui import WebDriverWait
 import undetected_chromedriver as uc
 
 
+def _detect_chrome_version():
+    """Detecta a versao major do Chrome instalado."""
+    import subprocess
+    import platform
+    try:
+        if platform.system() == "Darwin":
+            cmd = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--version"]
+        elif platform.system() == "Windows":
+            cmd = ["reg", "query", "HKEY_CURRENT_USER\\Software\\Google\\Chrome\\BLBeacon", "/v", "version"]
+        else:
+            cmd = ["google-chrome", "--version"]
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode()
+        import re
+        match = re.search(r"(\d+)\.", output)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        pass
+    return None
+
+
 def create_undetected_driver(headless: bool):
-    driver = uc.Chrome(headless=headless, version_main=145)
+    options = uc.ChromeOptions()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    version = _detect_chrome_version()
+    driver = uc.Chrome(headless=headless, options=options, version_main=version)
     return driver
 
 

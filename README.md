@@ -87,6 +87,30 @@ A aplicacao vai abrir automaticamente no navegador em `http://localhost:8501`.
 
 > **Obs:** caso o link termine com `ol=1`, apague esse termo antes de colar.
 
+## Docker
+
+1. Build da imagem
+
+    ```bash
+    docker build -t alugueis-olx .
+    ```
+
+2. Rodar o container
+
+    ```bash
+    docker run -p 8501:8501 alugueis-olx
+    ```
+
+3. Acessar `http://localhost:8501`
+
+## Deploy (Railway)
+
+1. Suba o projeto no GitHub
+2. Acesse [railway.app](https://railway.app/) e crie uma conta
+3. Clique em **New Project** > **Deploy from GitHub repo**
+4. Selecione o repositorio — o Railway detecta o Dockerfile automaticamente
+5. Apos o deploy, Railway gera uma URL publica para compartilhar com amigos
+
 ## Exemplo
 
 ![Exemplo](./img1.png)
