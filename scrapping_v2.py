@@ -4,7 +4,7 @@ import os
 import re
 from datetime import datetime
 import pandas as pd
-import requests
+import cloudscraper
 import streamlit as st
 from selenium.webdriver.common.by import By
 from driver.driver_init import create_undetected_driver, _is_docker
@@ -57,14 +57,12 @@ def get_last_page_number(pagination_list):
     return int(last_page_link.split("o=")[-1])
 
 
+_scraper = cloudscraper.create_scraper()
+
+
 def _fetch_page_data_requests(url):
-    """Busca dados da pagina OLX via requests, extraindo __NEXT_DATA__."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
-    resp = requests.get(url, headers=headers, timeout=30)
+    """Busca dados da pagina OLX via cloudscraper, extraindo __NEXT_DATA__."""
+    resp = _scraper.get(url, timeout=30)
     resp.raise_for_status()
     match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text)
     if not match:
