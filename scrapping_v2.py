@@ -254,7 +254,7 @@ if "shared_filters" not in st.session_state:
 
 # Buscar base URL do navegador (executa sempre para estar disponivel)
 from streamlit_js_eval import streamlit_js_eval
-_base_url = streamlit_js_eval(js_expressions="window.location.origin + window.location.pathname", key="get_base_url")
+_base_url = streamlit_js_eval(js_expressions="parent.window.location.origin", key="get_base_url")
 
 # --- Header e busca (sempre visivel) ---
 st.title("Busca de Imoveis OLX")
