@@ -1,11 +1,28 @@
 import time
 import json
 import re
-from datetime import datetime
+import base64
+import urllib.parse
+from datetime import datetime, date
 import pandas as pd
 import streamlit as st
 from selenium.webdriver.common.by import By
 from driver.driver_init import create_undetected_driver, _is_docker
+
+
+def _encode_state(state: dict) -> str:
+    """Codifica estado dos filtros em base64 compacto para URL."""
+    raw = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+
+
+def _decode_state(encoded: str) -> dict:
+    """Decodifica estado dos filtros da URL."""
+    padding = 4 - len(encoded) % 4
+    if padding != 4:
+        encoded += "=" * padding
+    raw = base64.urlsafe_b64decode(encoded).decode()
+    return json.loads(raw)
 
 
 
@@ -226,6 +243,18 @@ if "dados" not in st.session_state:
     st.session_state.dados = None
 if "bairros_version" not in st.session_state:
     st.session_state.bairros_version = 0
+if "shared_filters" not in st.session_state:
+    st.session_state.shared_filters = None
+if "auto_scraped" not in st.session_state:
+    st.session_state.auto_scraped = False
+
+# --- Decodificar estado compartilhado da URL ---
+qp = st.query_params
+if "s" in qp and not st.session_state.auto_scraped:
+    try:
+        st.session_state.shared_filters = _decode_state(qp["s"])
+    except Exception:
+        st.session_state.shared_filters = None
 
 # --- Header e busca (sempre visivel) ---
 st.title("Busca de Imoveis OLX")
@@ -257,13 +286,14 @@ with st.expander("Como usar", expanded=expanded):
 
 st.markdown("---")
 
-link = st.text_input("Link da busca na OLX:", placeholder="Cole o link da OLX aqui...")
+_sf = st.session_state.shared_filters or {}
+link = st.text_input("Link da busca na OLX:", value=_sf.get("link", ""), placeholder="Cole o link da OLX aqui...")
 col_val, col_btn = st.columns([3, 1])
 with col_val:
     valor_maximo = st.number_input(
         "Valor maximo mensal (R$):",
         min_value=0.0,
-        value=3000.0,
+        value=float(_sf.get("vm", 3000.0)),
         step=100.0,
         format="%.2f",
     )
@@ -271,7 +301,12 @@ with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
     buscar = st.button("Buscar", use_container_width=True, type="primary")
 
-if st.session_state.dados is None:
+# Auto-scrape quando abre link compartilhado
+if _sf.get("link") and not st.session_state.auto_scraped and st.session_state.dados is None:
+    buscar = True
+    st.session_state.auto_scraped = True
+
+if st.session_state.dados is None and not buscar:
     st.info("**Dica:** caso o link termine com `ol=1`, apague esse trecho antes de colar.")
 
 # --- Scraping ---
@@ -338,6 +373,19 @@ if st.session_state.dados is not None:
         # Linha 1: Custo total e Aluguel
         fcol1, fcol2 = st.columns(2)
 
+        def _clamp_range(sf_key, data_min, data_max):
+            """Retorna valor do shared_filters clampado ao range dos dados."""
+            if sf_key in _sf:
+                v = _sf[sf_key]
+                return (max(v[0], data_min), min(v[1], data_max))
+            return (data_min, data_max)
+
+        def _shared_multiselect(sf_key, options):
+            """Retorna default para multiselect: shared se existir, senao todos."""
+            if sf_key in _sf:
+                return [o for o in options if o in _sf[sf_key]]
+            return options
+
         with fcol1:
             min_cost = float(df["total_cost"].min())
             max_cost = float(df["total_cost"].max())
@@ -346,7 +394,7 @@ if st.session_state.dados is not None:
                     "Custo total (R$)",
                     min_value=min_cost,
                     max_value=max_cost,
-                    value=(min_cost, max_cost),
+                    value=_clamp_range("ct", min_cost, max_cost),
                     step=50.0,
                 )
             else:
@@ -360,7 +408,7 @@ if st.session_state.dados is not None:
                     "Aluguel (R$)",
                     min_value=min_price,
                     max_value=max_price,
-                    value=(min_price, max_price),
+                    value=_clamp_range("al", min_price, max_price),
                     step=50.0,
                 )
             else:
@@ -379,7 +427,7 @@ if st.session_state.dados is not None:
                         "Condominio (R$)",
                         min_value=min_cond,
                         max_value=max_cond,
-                        value=(min_cond, max_cond),
+                        value=_clamp_range("cd", min_cond, max_cond),
                         step=50.0,
                     )
                 else:
@@ -397,7 +445,7 @@ if st.session_state.dados is not None:
                         "Area (m²)",
                         min_value=min_size,
                         max_value=max_size,
-                        value=(min_size, max_size),
+                        value=_clamp_range("ar", min_size, max_size),
                         step=5.0,
                     )
                 else:
@@ -411,21 +459,21 @@ if st.session_state.dados is not None:
         with fcol5:
             quartos_opcoes = sorted(df["quartos"].dropna().unique().tolist())
             if quartos_opcoes:
-                quartos_sel = st.multiselect("Quartos", options=quartos_opcoes, default=quartos_opcoes)
+                quartos_sel = st.multiselect("Quartos", options=quartos_opcoes, default=_shared_multiselect("q", quartos_opcoes))
             else:
                 quartos_sel = []
 
         with fcol6:
             banheiros_opcoes = sorted(df["banheiros"].dropna().unique().tolist())
             if banheiros_opcoes:
-                banheiros_sel = st.multiselect("Banheiros", options=banheiros_opcoes, default=banheiros_opcoes)
+                banheiros_sel = st.multiselect("Banheiros", options=banheiros_opcoes, default=_shared_multiselect("b", banheiros_opcoes))
             else:
                 banheiros_sel = []
 
         with fcol7:
             vagas_opcoes = sorted(df["vagas"].dropna().unique().tolist())
             if vagas_opcoes:
-                vagas_sel = st.multiselect("Vagas", options=vagas_opcoes, default=vagas_opcoes)
+                vagas_sel = st.multiselect("Vagas", options=vagas_opcoes, default=_shared_multiselect("v", vagas_opcoes))
             else:
                 vagas_sel = []
 
@@ -435,17 +483,23 @@ if st.session_state.dados is not None:
                 # Carregar bairros salvos do localStorage
                 from streamlit_js_eval import streamlit_js_eval
                 bv = st.session_state.bairros_version
-                bairros_salvos_json = streamlit_js_eval(js_expressions="localStorage.getItem('bairros_salvos')", key=f"load_bairros_{bv}")
 
-                usar_salvos = st.checkbox("Usar bairros salvos")
-                if usar_salvos and bairros_salvos_json:
-                    salvos = json.loads(bairros_salvos_json)
-                    default_locais = [l for l in locais if l in salvos]
+                # Shared filters tem prioridade sobre localStorage
+                if "loc" in _sf:
+                    default_locais = [l for l in locais if l in _sf["loc"]]
+                    locais_sel = st.multiselect("Localizacao", options=locais, default=default_locais, key="locais_shared")
                 else:
-                    default_locais = locais
+                    bairros_salvos_json = streamlit_js_eval(js_expressions="localStorage.getItem('bairros_salvos')", key=f"load_bairros_{bv}")
 
-                multiselect_key = f"locais_{'salvos' if usar_salvos else 'todos'}"
-                locais_sel = st.multiselect("Localizacao", options=locais, default=default_locais, key=multiselect_key)
+                    usar_salvos = st.checkbox("Usar bairros salvos")
+                    if usar_salvos and bairros_salvos_json:
+                        salvos = json.loads(bairros_salvos_json)
+                        default_locais = [l for l in locais if l in salvos]
+                    else:
+                        default_locais = locais
+
+                    multiselect_key = f"locais_{'salvos' if usar_salvos else 'todos'}"
+                    locais_sel = st.multiselect("Localizacao", options=locais, default=default_locais, key=multiselect_key)
 
                 if st.button("Salvar bairros"):
                     bairros_json = json.dumps(locais_sel)
@@ -463,9 +517,15 @@ if st.session_state.dados is not None:
             updates_validos = df["update_dt"].dropna()
             if len(updates_validos) > 0:
                 min_upd = updates_validos.min().date()
+                upd_val = min_upd
+                if "upd" in _sf:
+                    try:
+                        upd_val = date.fromisoformat(_sf["upd"])
+                    except Exception:
+                        pass
                 data_update_filtro = st.date_input(
                     "Ultimo update a partir de",
-                    value=min_upd,
+                    value=upd_val,
                 )
             else:
                 data_update_filtro = None
@@ -474,9 +534,15 @@ if st.session_state.dados is not None:
             criacao_validas = df["criacao_dt"].dropna()
             if len(criacao_validas) > 0:
                 min_cri = criacao_validas.min().date()
+                cri_val = min_cri
+                if "cri" in _sf:
+                    try:
+                        cri_val = date.fromisoformat(_sf["cri"])
+                    except Exception:
+                        pass
                 data_criacao_filtro = st.date_input(
                     "Criado a partir de",
-                    value=min_cri,
+                    value=cri_val,
                 )
             else:
                 data_criacao_filtro = None
@@ -484,23 +550,27 @@ if st.session_state.dados is not None:
         with fcol10:
             tipos_anunciante = sorted(df["tipo_anunciante"].dropna().unique().tolist())
             if tipos_anunciante:
-                tipo_sel = st.multiselect("Tipo de anunciante", options=tipos_anunciante, default=tipos_anunciante)
+                tipo_sel = st.multiselect("Tipo de anunciante", options=tipos_anunciante, default=_shared_multiselect("tipo", tipos_anunciante))
             else:
                 tipo_sel = []
 
         with fcol11:
-            filtro_reduzido = st.checkbox("Somente com preco reduzido")
-            remover_duplicatas = st.checkbox("Remover duplicatas (mesmo titulo)")
+            filtro_reduzido = st.checkbox("Somente com preco reduzido", value=_sf.get("red", False))
+            remover_duplicatas = st.checkbox("Remover duplicatas (mesmo titulo)", value=_sf.get("dup", False))
 
         # --- Ordenacao ---
         st.subheader("Ordenacao")
         ocol1, ocol2 = st.columns(2)
+        _sort_options = ["Custo Total", "Aluguel", "Condominio", "Area", "Ultimo Update", "Data de Criacao"]
+        _sort_default = _sf.get("sort", "Custo Total")
+        _sort_idx = _sort_options.index(_sort_default) if _sort_default in _sort_options else 0
+        _ord_options = ["Crescente", "Decrescente"]
+        _ord_default = _sf.get("ord", "Crescente")
+        _ord_idx = _ord_options.index(_ord_default) if _ord_default in _ord_options else 0
         with ocol1:
-            ordenar_por = st.selectbox("Ordenar por", [
-                "Custo Total", "Aluguel", "Condominio", "Area", "Ultimo Update", "Data de Criacao"
-            ])
+            ordenar_por = st.selectbox("Ordenar por", _sort_options, index=_sort_idx)
         with ocol2:
-            ordem = st.radio("Ordem", ["Crescente", "Decrescente"], horizontal=True)
+            ordem = st.radio("Ordem", _ord_options, index=_ord_idx, horizontal=True)
 
         col_map = {
             "Custo Total": "total_cost",
@@ -582,12 +652,43 @@ if st.session_state.dados is not None:
 
         st.caption(f"Exibindo {len(df_filtrado)} de {len(df)} imoveis")
 
-        # --- Download planilha ---
+        # --- Compartilhar ---
+        current_state = {
+            "link": link,
+            "vm": valor_maximo,
+            "ct": list(faixa_custo),
+            "al": list(faixa_aluguel),
+            "q": quartos_sel,
+            "b": banheiros_sel,
+            "v": vagas_sel,
+            "loc": locais_sel,
+            "tipo": tipo_sel,
+            "red": filtro_reduzido,
+            "dup": remover_duplicatas,
+            "sort": ordenar_por,
+            "ord": ordem,
+        }
+        if faixa_cond is not None:
+            current_state["cd"] = list(faixa_cond)
+        if faixa_area is not None:
+            current_state["ar"] = list(faixa_area)
+        if data_update_filtro is not None:
+            current_state["upd"] = data_update_filtro.isoformat()
+        if data_criacao_filtro is not None:
+            current_state["cri"] = data_criacao_filtro.isoformat()
+
+        encoded = _encode_state(current_state)
+
+        # --- Download planilha + Compartilhar ---
         colunas_ocultas = ["image", "update_dt", "criacao_dt"]
         colunas_tabela = [c for c in df_filtrado.columns if c not in colunas_ocultas]
         csv_data = df_filtrado[colunas_tabela].to_csv(index=False).encode("utf-8")
 
-        dl_col1, dl_col2 = st.columns([1, 4])
+        # Buscar base URL do navegador (async, disponivel apos primeiro render)
+        from streamlit_js_eval import streamlit_js_eval
+        _base_url = streamlit_js_eval(js_expressions="window.location.origin + window.location.pathname", key="get_base_url")
+
+        dl_col1, dl_col2, dl_col3 = st.columns([1, 1, 3])
         with dl_col1:
             st.download_button(
                 label="Baixar planilha (CSV)",
@@ -596,6 +697,31 @@ if st.session_state.dados is not None:
                 mime="text/csv",
             )
         with dl_col2:
+            if st.button("Compartilhar busca", type="secondary"):
+                if _base_url:
+                    share_url = f"{_base_url}?s={encoded}"
+                    # Tentar encurtar via is.gd
+                    try:
+                        import urllib.request
+                        short_api = f"https://is.gd/create.php?format=simple&url={urllib.parse.quote(share_url, safe='')}"
+                        with urllib.request.urlopen(short_api, timeout=3) as resp:
+                            short_url = resp.read().decode().strip()
+                        st.session_state._share_url = short_url
+                    except Exception:
+                        st.session_state._share_url = share_url
+                    st.rerun()
+                else:
+                    st.warning("Clique novamente para gerar o link.")
+                    st.rerun()
+
+        if "_share_url" in st.session_state:
+            st.success("Link copiavel gerado! Compartilhe com seus amigos:")
+            st.code(st.session_state._share_url, language=None)
+            if st.button("Fechar"):
+                del st.session_state._share_url
+                st.rerun()
+
+        with dl_col3:
             ver_tabela = st.checkbox("Ver como tabela")
 
         if ver_tabela:
