@@ -8,8 +8,6 @@ import streamlit as st
 from selenium.webdriver.common.by import By
 from driver.driver_init import create_undetected_driver, _is_docker
 
-BAIRROS_CSV = "bairros_salvos.csv"
-MAX_BAIRROS_REGISTROS = 5
 
 
 def parse_date(value):
@@ -200,14 +198,13 @@ st.set_page_config(
 # --- Session state ---
 if "dados" not in st.session_state:
     st.session_state.dados = None
-if "locais_removidos" not in st.session_state:
-    st.session_state.locais_removidos = set()
 
-# --- Tela inicial (onboarding) ou sidebar para nova busca ---
+# --- Header e busca (sempre visivel) ---
+st.title("Busca de Imoveis OLX")
+st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferramenta resolve isso.")
+
+# --- Onboarding (apenas quando nao tem dados) ---
 if st.session_state.dados is None:
-    # Tela principal com instrucoes
-    st.title("Busca de Imoveis OLX")
-    st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferramenta resolve isso.")
     st.markdown("---")
     st.subheader("Como usar")
 
@@ -232,37 +229,24 @@ if st.session_state.dados is None:
             "Nos calculamos o custo real (aluguel + condominio) de cada imovel para voce."
         )
 
-    st.markdown("---")
+st.markdown("---")
 
-    link = st.text_input("Link da busca na OLX:", placeholder="Cole o link da OLX aqui...")
-    col_val, col_btn = st.columns([3, 1])
-    with col_val:
-        valor_maximo = st.number_input(
-            "Valor maximo mensal (R$):",
-            min_value=0.0,
-            value=3000.0,
-            step=100.0,
-            format="%.2f",
-        )
-    with col_btn:
-        st.markdown("<br>", unsafe_allow_html=True)
-        buscar = st.button("Buscar", use_container_width=True, type="primary")
+link = st.text_input("Link da busca na OLX:", placeholder="Cole o link da OLX aqui...")
+col_val, col_btn = st.columns([3, 1])
+with col_val:
+    valor_maximo = st.number_input(
+        "Valor maximo mensal (R$):",
+        min_value=0.0,
+        value=3000.0,
+        step=100.0,
+        format="%.2f",
+    )
+with col_btn:
+    st.markdown("<br>", unsafe_allow_html=True)
+    buscar = st.button("Buscar", use_container_width=True, type="primary")
 
+if st.session_state.dados is None:
     st.info("**Dica:** caso o link termine com `ol=1`, apague esse trecho antes de colar.")
-else:
-    # Sidebar para nova busca quando ja tem dados
-    with st.sidebar:
-        st.header("Nova busca")
-        link = st.text_input("Link da OLX:", placeholder="Cole o link da busca da OLX aqui")
-        valor_maximo = st.number_input(
-            "Valor maximo mensal (R$):",
-            min_value=0.0,
-            value=3000.0,
-            step=100.0,
-            format="%.2f",
-        )
-        buscar = st.button("Buscar", use_container_width=True, type="primary")
-    st.title("Busca de Imoveis OLX")
 
 # --- Scraping ---
 if buscar:
