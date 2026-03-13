@@ -224,16 +224,16 @@ div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div[data-te
 # --- Session state ---
 if "dados" not in st.session_state:
     st.session_state.dados = None
+if "bairros_version" not in st.session_state:
+    st.session_state.bairros_version = 0
 
 # --- Header e busca (sempre visivel) ---
 st.title("Busca de Imoveis OLX")
 st.markdown("A OLX nao filtra pelo valor total (aluguel + condominio). Essa ferramenta resolve isso.")
 
-# --- Onboarding (apenas quando nao tem dados) ---
-if st.session_state.dados is None:
-    st.markdown("---")
-    st.subheader("Como usar")
-
+# --- Tutorial (sempre visivel, colapsavel) ---
+expanded = st.session_state.dados is None
+with st.expander("Como usar", expanded=expanded):
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("**1. Pesquise na OLX**")
@@ -434,7 +434,8 @@ if st.session_state.dados is not None:
             if locais:
                 # Carregar bairros salvos do localStorage
                 from streamlit_js_eval import streamlit_js_eval
-                bairros_salvos_json = streamlit_js_eval(js_expressions="localStorage.getItem('bairros_salvos')", key="load_bairros")
+                bv = st.session_state.bairros_version
+                bairros_salvos_json = streamlit_js_eval(js_expressions="localStorage.getItem('bairros_salvos')", key=f"load_bairros_{bv}")
 
                 usar_salvos = st.checkbox("Usar bairros salvos")
                 if usar_salvos and bairros_salvos_json:
@@ -448,8 +449,10 @@ if st.session_state.dados is not None:
 
                 if st.button("Salvar bairros"):
                     bairros_json = json.dumps(locais_sel)
-                    streamlit_js_eval(js_expressions=f"localStorage.setItem('bairros_salvos', '{bairros_json}')", key="save_bairros")
+                    st.session_state.bairros_version += 1
+                    streamlit_js_eval(js_expressions=f"localStorage.setItem('bairros_salvos', '{bairros_json}')", key=f"save_bairros_{st.session_state.bairros_version}")
                     st.success(f"Salvos {len(locais_sel)} bairros no navegador!")
+                    st.rerun()
             else:
                 locais_sel = []
 
