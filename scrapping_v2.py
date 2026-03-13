@@ -2,7 +2,6 @@ import time
 import json
 import re
 import base64
-import urllib.parse
 from datetime import datetime, date
 import pandas as pd
 import streamlit as st
@@ -245,28 +244,13 @@ if "bairros_version" not in st.session_state:
     st.session_state.bairros_version = 0
 if "shared_filters" not in st.session_state:
     st.session_state.shared_filters = None
-if "auto_scrape_link" not in st.session_state:
-    st.session_state.auto_scrape_link = None
-    st.session_state.auto_scrape_vm = None
-
-# --- Decodificar estado compartilhado da URL ---
-try:
-    _raw_s = st.query_params.get("s", None)
-except Exception:
-    _raw_s = None
-
-if _raw_s and st.session_state.shared_filters is None:
+    # Decodificar estado compartilhado da URL (apenas 1 vez)
     try:
-        st.session_state.shared_filters = _decode_state(_raw_s)
-        sf = st.session_state.shared_filters
-        st.session_state.auto_scrape_link = sf.get("link")
-        st.session_state.auto_scrape_vm = sf.get("vm", 3000.0)
-        # Limpar query params para evitar interferencia
-        st.query_params.clear()
-        st.rerun()
+        _raw_s = dict(st.query_params).get("s")
+        if _raw_s:
+            st.session_state.shared_filters = _decode_state(_raw_s)
     except Exception:
-        st.session_state.shared_filters = None
-        st.query_params.clear()
+        pass
 
 # --- Header e busca (sempre visivel) ---
 st.title("Busca de Imoveis OLX")
@@ -299,16 +283,14 @@ with st.expander("Como usar", expanded=expanded):
 st.markdown("---")
 
 _sf = st.session_state.shared_filters or {}
-_default_link = st.session_state.auto_scrape_link or ""
-_default_vm = float(st.session_state.auto_scrape_vm or _sf.get("vm", 3000.0))
 
-link = st.text_input("Link da busca na OLX:", value=_default_link, placeholder="Cole o link da OLX aqui...")
+link = st.text_input("Link da busca na OLX:", value=_sf.get("link", ""), placeholder="Cole o link da OLX aqui...")
 col_val, col_btn = st.columns([3, 1])
 with col_val:
     valor_maximo = st.number_input(
         "Valor maximo mensal (R$):",
         min_value=0.0,
-        value=_default_vm,
+        value=float(_sf.get("vm", 3000.0)),
         step=100.0,
         format="%.2f",
     )
@@ -316,11 +298,9 @@ with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
     buscar = st.button("Buscar", use_container_width=True, type="primary")
 
-# Auto-scrape quando abre link compartilhado
-if st.session_state.auto_scrape_link and st.session_state.dados is None:
-    buscar = True
-
-if st.session_state.dados is None and not buscar:
+if _sf and st.session_state.dados is None:
+    st.info("Link compartilhado carregado! Clique em **Buscar** para ver os resultados.")
+elif st.session_state.dados is None and not buscar:
     st.info("**Dica:** caso o link termine com `ol=1`, apague esse trecho antes de colar.")
 
 # --- Scraping ---
@@ -339,15 +319,11 @@ if buscar:
             try:
                 data = scrapping(link, valor_maximo, progress_callback=update_progress)
                 st.session_state.dados = data
-                st.session_state.auto_scrape_link = None
-                st.session_state.auto_scrape_vm = None
                 status.update(label="Busca finalizada!", state="complete", expanded=False)
             except Exception as e:
                 status.update(label="Erro durante a busca", state="error", expanded=True)
                 st.error(f"Ocorreu um erro: {e}")
                 st.session_state.dados = None
-                st.session_state.auto_scrape_link = None
-                st.session_state.auto_scrape_vm = None
 
 # --- Results ---
 if st.session_state.dados is not None:
@@ -702,7 +678,7 @@ if st.session_state.dados is not None:
         colunas_tabela = [c for c in df_filtrado.columns if c not in colunas_ocultas]
         csv_data = df_filtrado[colunas_tabela].to_csv(index=False).encode("utf-8")
 
-        # Buscar base URL do navegador (async, disponivel apos primeiro render)
+        # Buscar base URL do navegador
         from streamlit_js_eval import streamlit_js_eval
         _base_url = streamlit_js_eval(js_expressions="window.location.origin + window.location.pathname", key="get_base_url")
 
@@ -715,32 +691,17 @@ if st.session_state.dados is not None:
                 mime="text/csv",
             )
         with dl_col2:
-            if st.button("Compartilhar busca", type="secondary"):
-                if _base_url:
-                    share_url = f"{_base_url}?s={encoded}"
-                    # Tentar encurtar via is.gd
-                    try:
-                        import urllib.request
-                        short_api = f"https://is.gd/create.php?format=simple&url={urllib.parse.quote(share_url, safe='')}"
-                        with urllib.request.urlopen(short_api, timeout=3) as resp:
-                            short_url = resp.read().decode().strip()
-                        st.session_state._share_url = short_url
-                    except Exception:
-                        st.session_state._share_url = share_url
-                    st.rerun()
-                else:
-                    st.warning("Clique novamente para gerar o link.")
-                    st.rerun()
-
-        if "_share_url" in st.session_state:
-            st.success("Link copiavel gerado! Compartilhe com seus amigos:")
-            st.code(st.session_state._share_url, language=None)
-            if st.button("Fechar"):
-                del st.session_state._share_url
-                st.rerun()
-
+            compartilhar = st.button("Compartilhar busca", type="secondary")
         with dl_col3:
             ver_tabela = st.checkbox("Ver como tabela")
+
+        if compartilhar:
+            if _base_url:
+                share_url = f"{_base_url}?s={encoded}"
+                st.success("Compartilhe este link com seus amigos:")
+                st.code(share_url, language=None)
+            else:
+                st.warning("Clique novamente para gerar o link.")
 
         if ver_tabela:
             st.dataframe(
