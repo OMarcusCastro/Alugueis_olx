@@ -71,26 +71,19 @@ def get_last_page_number(pagination_list):
     return int(last_page_link.split("o=")[-1])
 
 
-_BROWSER_HEADERS = {
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Cache-Control": "no-cache",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
-    "Sec-Fetch-User": "?1",
-    "Upgrade-Insecure-Requests": "1",
-}
-
-_IMPERSONATE_PROFILES = ["chrome110", "chrome116", "chrome120", "chrome124"]
-
-
-def _fetch_page_curl(url):
-    """Busca dados da pagina OLX via curl_cffi (bypassa Cloudflare)."""
+def _create_curl_session():
+    """Cria sessao curl_cffi com cookies persistentes (como browser real)."""
     from curl_cffi import requests as curl_requests
-    profile = random.choice(_IMPERSONATE_PROFILES)
-    resp = curl_requests.get(url, impersonate=profile, headers=_BROWSER_HEADERS, timeout=30)
+    session = curl_requests.Session(impersonate="chrome")
+    # Aquecer sessao — pega cookies Cloudflare
+    session.get("https://www.olx.com.br", timeout=15)
+    time.sleep(random.uniform(1.0, 2.0))
+    return session
+
+
+def _fetch_page_curl(url, session):
+    """Busca dados da pagina OLX via curl_cffi (bypassa Cloudflare)."""
+    resp = session.get(url, timeout=30)
     resp.raise_for_status()
     match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', resp.text)
     if not match:
@@ -111,7 +104,11 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
     # Limpar ol=1 do link se presente
     link = re.sub(r'[&?]ol=\d+', '', link)
 
-    first_page = _fetch_page_curl(link)
+    log_msgs = []
+    session = _create_curl_session()
+    log_msgs.append("Sessao criada, cookies Cloudflare obtidos")
+
+    first_page = _fetch_page_curl(link, session)
     page_props = first_page['props']['pageProps']
     ads_data = page_props['ads']
 
@@ -141,7 +138,6 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
     last_page_number = max(1, min((total_ads + 49) // 50, 100))
     apartamentos = []
     erros = 0
-    log_msgs = []
 
     # Logar keys de pageProps para diagnostico
     pp_keys = [k for k in page_props.keys() if k != 'ads']
@@ -158,7 +154,7 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
             time.sleep(random.uniform(2.0, 4.0))
             try:
                 page_url = f"{link}&o={i}" if "?" in link else f"{link}?o={i}"
-                page_data = _fetch_page_curl(page_url)
+                page_data = _fetch_page_curl(page_url, session)
                 dados = page_data['props']['pageProps']['ads']
                 log_msgs.append(f"pag {i}: {len(dados)} ads OK")
             except Exception as e:
@@ -166,7 +162,7 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
                 # Retry com backoff
                 time.sleep(random.uniform(5.0, 8.0))
                 try:
-                    page_data = _fetch_page_curl(page_url)
+                    page_data = _fetch_page_curl(page_url, session)
                     dados = page_data['props']['pageProps']['ads']
                     log_msgs.append(f"pag {i}: retry OK, {len(dados)} ads")
                 except Exception as e2:
