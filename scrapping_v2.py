@@ -1,3 +1,4 @@
+import os
 import time
 import json
 import re
@@ -249,12 +250,20 @@ if "shared_filters" not in st.session_state:
         _raw_s = dict(st.query_params).get("s")
         if _raw_s:
             st.session_state.shared_filters = _decode_state(_raw_s)
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"Erro ao carregar link compartilhado: {e}")
 
-# Buscar base URL do navegador (executa sempre para estar disponivel)
-from streamlit_js_eval import streamlit_js_eval
-_base_url = streamlit_js_eval(js_expressions="parent.window.location.origin", key="get_base_url")
+def _get_base_url():
+    """Obtem URL base do app server-side."""
+    # Railway define RAILWAY_PUBLIC_DOMAIN automaticamente
+    domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+    if domain:
+        return f"https://{domain}"
+    # Outras plataformas podem usar RENDER_EXTERNAL_URL, HEROKU_APP_NAME, etc.
+    render_url = os.environ.get("RENDER_EXTERNAL_URL")
+    if render_url:
+        return render_url
+    return "http://localhost:8501"
 
 # --- Header e busca (sempre visivel) ---
 st.title("Busca de Imoveis OLX")
@@ -696,12 +705,9 @@ if st.session_state.dados is not None:
             ver_tabela = st.checkbox("Ver como tabela")
 
         if compartilhar:
-            if _base_url:
-                share_url = f"{_base_url}?s={encoded}"
-                st.success("Compartilhe este link com seus amigos:")
-                st.code(share_url, language=None)
-            else:
-                st.warning("Clique novamente para gerar o link.")
+            share_url = f"{_get_base_url()}?s={encoded}"
+            st.success("Compartilhe este link com seus amigos:")
+            st.code(share_url, language=None)
 
         if ver_tabela:
             st.dataframe(
