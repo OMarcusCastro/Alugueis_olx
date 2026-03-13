@@ -194,6 +194,33 @@ st.set_page_config(
     layout="wide",
 )
 
+# --- CSS para alinhar cards da galeria ---
+st.markdown("""
+<style>
+/* Forca colunas da galeria a terem mesma altura */
+div[data-testid="stHorizontalBlock"] {
+    align-items: stretch;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div[data-testid="stVerticalBlockBorderWrapper"] {
+    height: 100%;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div[data-testid="stVerticalBlockBorderWrapper"] > div {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div[data-testid="stVerticalBlockBorderWrapper"] > div > div[data-testid="stVerticalBlock"] {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+/* Botao "Ver anuncio" sempre no rodape do card */
+div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div[data-testid="stVerticalBlockBorderWrapper"] > div > div[data-testid="stVerticalBlock"] > div[data-testid="stLinkButton"] {
+    margin-top: auto;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # --- Session state ---
 if "dados" not in st.session_state:
     st.session_state.dados = None
@@ -416,7 +443,8 @@ if st.session_state.dados is not None:
                 else:
                     default_locais = locais
 
-                locais_sel = st.multiselect("Localizacao", options=locais, default=default_locais)
+                multiselect_key = f"locais_{'salvos' if usar_salvos else 'todos'}"
+                locais_sel = st.multiselect("Localizacao", options=locais, default=default_locais, key=multiselect_key)
 
                 if st.button("Salvar bairros"):
                     bairros_json = json.dumps(locais_sel)
@@ -551,16 +579,23 @@ if st.session_state.dados is not None:
 
         st.caption(f"Exibindo {len(df_filtrado)} de {len(df)} imoveis")
 
-        # --- Toggle de visualizacao ---
-        visualizacao = st.radio(
-            "Visualizacao:",
-            ["Tabela", "Galeria"],
-            horizontal=True,
-        )
+        # --- Download planilha ---
+        colunas_ocultas = ["image", "update_dt", "criacao_dt"]
+        colunas_tabela = [c for c in df_filtrado.columns if c not in colunas_ocultas]
+        csv_data = df_filtrado[colunas_tabela].to_csv(index=False).encode("utf-8")
 
-        if visualizacao == "Tabela":
-            colunas_ocultas = ["image", "update_dt", "criacao_dt"]
-            colunas_tabela = [c for c in df_filtrado.columns if c not in colunas_ocultas]
+        dl_col1, dl_col2 = st.columns([1, 4])
+        with dl_col1:
+            st.download_button(
+                label="Baixar planilha (CSV)",
+                data=csv_data,
+                file_name="imoveis_olx.csv",
+                mime="text/csv",
+            )
+        with dl_col2:
+            ver_tabela = st.checkbox("Ver como tabela")
+
+        if ver_tabela:
             st.dataframe(
                 df_filtrado[colunas_tabela],
                 column_config={
