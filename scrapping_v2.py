@@ -99,7 +99,7 @@ def _wait_for_element(driver, by, value, timeout=20):
     )
 
 
-def _scrapping_curl(link, price_limit, progress_callback=None):
+def _scrapping_curl(link, price_limit, progress_callback=None, page_start=1, page_end=None):
     """Scrapping via curl_cffi (para Docker/servidor)."""
     # Limpar ol=1 do link se presente
     link = re.sub(r'[&?]ol=\d+', '', link)
@@ -108,7 +108,13 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
     session = _create_curl_session()
     log_msgs.append("Sessao criada, cookies Cloudflare obtidos")
 
-    first_page = _fetch_page_curl(link, session)
+    # Buscar primeira pagina do intervalo
+    if page_start == 1:
+        first_url = link
+    else:
+        first_url = f"{link}&o={page_start}" if "?" in link else f"{link}?o={page_start}"
+
+    first_page = _fetch_page_curl(first_url, session)
     page_props = first_page['props']['pageProps']
     ads_data = page_props['ads']
 
@@ -136,19 +142,25 @@ def _scrapping_curl(link, price_limit, progress_callback=None):
                     break
 
     last_page_number = max(1, min((total_ads + 49) // 50, 100))
+    if page_end is None:
+        page_end = last_page_number
+    page_end = min(page_end, last_page_number)
+
     apartamentos = []
     erros = 0
+    total_pages = page_end - page_start + 1
 
     # Logar keys de pageProps para diagnostico
     pp_keys = [k for k in page_props.keys() if k != 'ads']
     log_msgs.append(f"pageProps keys: {pp_keys}")
-    log_msgs.append(f"totalAds={total_ads}, paginas={last_page_number}, ads_pag1={len(ads_data)}")
+    log_msgs.append(f"totalAds={total_ads}, paginas_total={last_page_number}, buscando={page_start}-{page_end}, ads_pag1={len(ads_data)}")
 
-    for i in range(1, last_page_number + 1):
+    for i in range(page_start, page_end + 1):
+        progress_idx = i - page_start + 1
         if progress_callback:
-            progress_callback(i, last_page_number, info=f"totalAds={total_ads} | {len(apartamentos)} coletados")
+            progress_callback(progress_idx, total_pages, info=f"pag {i}/{last_page_number} | {len(apartamentos)} coletados")
 
-        if i == 1:
+        if i == page_start:
             dados = ads_data
         else:
             time.sleep(random.uniform(2.0, 4.0))
@@ -257,9 +269,57 @@ def _parse_apartamento(apartamento, price_limit, apartamentos):
         print(e)
 
 
-def scrapping(link, price_limit, progress_callback=None):
+def scout(link):
+    """Faz busca rapida da primeira pagina para descobrir totalAds e numero de paginas."""
+    link = re.sub(r'[&?]ol=\d+', '', link)
     if _is_docker():
-        return _scrapping_curl(link, price_limit, progress_callback)
+        session = _create_curl_session()
+        first_page = _fetch_page_curl(link, session)
+    else:
+        from selenium.webdriver.common.by import By
+        driver = create_undetected_driver(headless=False)
+        driver.get(link)
+        import json as _json
+        first_page = _json.loads(driver.find_element(
+            By.ID, "__NEXT_DATA__").get_attribute("innerHTML"))
+        driver.quit()
+
+    page_props = first_page['props']['pageProps']
+    ads_data = page_props.get('ads', [])
+
+    total_ads = (
+        page_props.get('totalAds') or
+        page_props.get('totalOfAds') or
+        page_props.get('totalResults') or
+        page_props.get('total') or
+        0
+    )
+    if total_ads == 0:
+        for key in ['search', 'searchResult', 'listing', 'pagination']:
+            if key in page_props and isinstance(page_props[key], dict):
+                total_ads = (
+                    page_props[key].get('totalAds') or
+                    page_props[key].get('totalOfAds') or
+                    page_props[key].get('total') or
+                    page_props[key].get('totalResults') or
+                    0
+                )
+                if total_ads:
+                    break
+
+    last_page = max(1, min((total_ads + 49) // 50, 100))
+    pp_keys = [k for k in page_props.keys() if k != 'ads']
+    return {
+        "total_ads": total_ads,
+        "last_page": last_page,
+        "ads_page1": len(ads_data),
+        "pageProps_keys": pp_keys,
+    }
+
+
+def scrapping(link, price_limit, progress_callback=None, page_start=1, page_end=None):
+    if _is_docker():
+        return _scrapping_curl(link, price_limit, progress_callback, page_start, page_end)
     return _scrapping_driver(link, price_limit, progress_callback)
 
 
@@ -300,6 +360,8 @@ div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] > div[data-te
 # --- Session state ---
 if "dados" not in st.session_state:
     st.session_state.dados = None
+if "scout_info" not in st.session_state:
+    st.session_state.scout_info = None
 if "bairros_version" not in st.session_state:
     st.session_state.bairros_version = 0
 if "shared_filters" not in st.session_state:
@@ -376,10 +438,54 @@ elif st.session_state.dados is None and not buscar:
     st.info("**Dica:** caso o link termine com `ol=1`, apague esse trecho antes de colar.")
 
 # --- Scraping ---
+_LARGE_THRESHOLD_PAGES = 20
+_LARGE_THRESHOLD_ADS = 1000
+
 if buscar:
     if not link:
         st.error("Por favor, cole o link da busca da OLX.")
     else:
+        # Fase 1: Scout rapido para descobrir total de paginas
+        with st.spinner("Verificando quantidade de resultados..."):
+            try:
+                info = scout(link)
+                st.session_state.scout_info = info
+                st.session_state.dados = None
+            except Exception as e:
+                st.error(f"Erro ao verificar resultados: {e}")
+                st.session_state.scout_info = None
+
+# Fase 2: Se scout detectou busca grande, mostrar seletor de intervalo
+if st.session_state.scout_info is not None and st.session_state.dados is None:
+    info = st.session_state.scout_info
+    total_ads = info["total_ads"]
+    last_page = info["last_page"]
+
+    is_large = last_page > _LARGE_THRESHOLD_PAGES or total_ads > _LARGE_THRESHOLD_ADS
+
+    if is_large:
+        st.warning(
+            f"Essa busca tem **{total_ads} anuncios** em **{last_page} paginas**. "
+            f"Buscar tudo de uma vez pode demorar muito e ser bloqueado pela OLX."
+        )
+        st.markdown("Escolha o intervalo de paginas que deseja buscar:")
+        col_start, col_end = st.columns(2)
+        with col_start:
+            pg_start = st.number_input("Pagina inicial:", min_value=1, max_value=last_page, value=1, step=1)
+        with col_end:
+            pg_end = st.number_input("Pagina final:", min_value=1, max_value=last_page, value=min(20, last_page), step=1)
+
+        est_ads = (pg_end - pg_start + 1) * 50
+        st.caption(f"Estimativa: ~{est_ads} anuncios ({pg_end - pg_start + 1} paginas)")
+
+        confirmar = st.button("Confirmar busca", type="primary", use_container_width=True)
+    else:
+        # Busca pequena — vai direto
+        pg_start = 1
+        pg_end = last_page
+        confirmar = True
+
+    if confirmar:
         with st.status("Buscando imoveis...", expanded=True) as status:
             progress_bar = st.progress(0)
             progress_text = st.empty()
@@ -392,9 +498,14 @@ if buscar:
                 progress_text.text(msg)
 
             try:
-                data, log_msgs = scrapping(link, valor_maximo, progress_callback=update_progress)
+                data, log_msgs = scrapping(
+                    link, valor_maximo,
+                    progress_callback=update_progress,
+                    page_start=int(pg_start), page_end=int(pg_end),
+                )
                 st.session_state.dados = data
                 st.session_state._scrape_log = log_msgs
+                st.session_state.scout_info = None
                 status.update(label="Busca finalizada!", state="complete", expanded=False)
             except Exception as e:
                 status.update(label="Erro durante a busca", state="error", expanded=True)
